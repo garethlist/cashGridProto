@@ -1,5 +1,7 @@
 # Cash Forecast Grid
 
+[![build](https://github.com/garethlist/cashGridProto/actions/workflows/build.yml/badge.svg)](https://github.com/garethlist/cashGridProto/actions/workflows/build.yml)
+
 An interactive cash-flow forecast built with **React + Vite**. **Daily** cashflow
 is the source of truth: a granularity toggle (**Days / Weeks / Months**) re-buckets
 the table, while a custom SVG chart always plots the **daily running balance** —
@@ -93,13 +95,22 @@ connected view.
   first-time visitor defaults to their OS setting. Themes are driven by a
   `data-theme` attribute + CSS variables.
 
-## Run
+## Run it locally
+
+Requires **Node 18+**.
 
 ```bash
 npm install
-npm run dev      # Vite on http://localhost:5173
+npm run dev      # Vite dev server on http://localhost:5173
 npm run build    # production build to dist/
+npm run bundle   # build + inline everything into a single self-contained artifact.html
 ```
+
+`npm run bundle` runs the Vite build then `inline.mjs`, which folds the CSS and
+JS into one standalone `artifact.html` (no external requests) — the file that
+gets published as a hosted Claude Artifact. It's git-ignored (a build output)
+and rebuilt on every push by the [`build`](.github/workflows/build.yml) GitHub
+Actions workflow, which uploads it as a downloadable run artifact.
 
 ## Structure
 
