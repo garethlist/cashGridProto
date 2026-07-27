@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+*.local
+.vite
+.DS_Store
+npm-debug.log*
+
+# build output — the inlined single-file bundle published as a Claude Artifact
+artifact.html

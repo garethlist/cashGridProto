@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
+      "port": 5173
+    },
+    {
+      "name": "artifact",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["C:\\Users\\GARETH~1\\AppData\\Local\\Temp\\claude\\C--Users-GarethList-Documents-Claude-Projects-Code-Grid\\2e2242b9-d619-4bbd-b35e-d9218eb49a4a\\scratchpad\\server.mjs"],
+      "port": 4180
+    }
+  ]
+}
