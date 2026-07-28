@@ -25,6 +25,7 @@ export default function ForecastTable({
   onAddShock,
   onCellClick,
   onOpenModel,
+  onGridMode,
   underlyingCell,
   gridMode = 'base',
   shockRanges = [],
@@ -47,7 +48,9 @@ export default function ForecastTable({
       <thead>
         <tr>
           <th className="grid__rowhead grid__rowhead--corner">
-            {editable ? 'Category · daily' : `Category · ${granularity === 'week' ? 'weekly' : 'monthly'}`}
+            <span className="rowhead__inner">
+              <ModeSwitch value={gridMode} onChange={onGridMode} />
+            </span>
           </th>
           {buckets.map((b) => (
             <th key={b.key} className="grid__colhead">
@@ -173,6 +176,40 @@ export default function ForecastTable({
         </tr>
       </tbody>
     </table>
+  )
+}
+
+// Base ⇄ Shocks, as a small switch with the option named either side. The knob
+// slides between them and picks up the shock orange on the right.
+function ModeSwitch({ value, onChange }) {
+  const shocks = value === 'shocks'
+  return (
+    <span className={`modeswitch ${shocks ? 'modeswitch--shocks' : ''}`}>
+      <button
+        className={`modeswitch__opt ${!shocks ? 'modeswitch__opt--on' : ''}`}
+        onClick={() => onChange('base')}
+        title="Base — click a cell to see the underlying data behind it"
+      >
+        Base
+      </button>
+      <button
+        className="modeswitch__track"
+        role="switch"
+        aria-checked={shocks}
+        aria-label="Grid mode: Base or Shocks"
+        onClick={() => onChange(shocks ? 'base' : 'shocks')}
+        title={shocks ? 'Switch to Base mode' : 'Switch to Shocks mode'}
+      >
+        <span className="modeswitch__knob" />
+      </button>
+      <button
+        className={`modeswitch__opt ${shocks ? 'modeswitch__opt--on' : ''}`}
+        onClick={() => onChange('shocks')}
+        title="Shocks — click a row to isolate it and add manual shocks"
+      >
+        Shocks
+      </button>
+    </span>
   )
 }
 

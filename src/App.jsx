@@ -663,15 +663,6 @@ export default function App() {
     }))
   }, [])
 
-  const resetAll = useCallback(() => {
-    if (isSummary) {
-      setTabStates(Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)])))
-    } else {
-      const e = ENTITIES.find((x) => x.id === activeTab)
-      setState(makeEntity(e))
-    }
-  }, [isSummary, activeTab, setState])
-
   // Per-entity contribution to the group closing balance, in the group currency.
   // Always computed so the bar stays put when switching tabs.
   const contributions = useMemo(
@@ -811,7 +802,6 @@ export default function App() {
             Scenarios
           </button>
         </div>
-        <span className="tabbar__meta">{tab.company} · {displayCurrency}</span>
       </div>
 
       <header className="app__header">
@@ -838,16 +828,9 @@ export default function App() {
             )}
           </h1>
         </div>
+        {/* right-aligned, so it lines up with the right edge of the last KPI card */}
         <div className="app__controls">
-          <span className="modepick">
-            <span className="modepick__label">Mode</span>
-            <span className="seg">
-              <button className={`seg__btn ${gridMode === 'base' ? 'seg__btn--on' : ''}`} onClick={() => setGridMode('base')} title="Base — click a cell to see the underlying data behind it">Base</button>
-              <button className={`seg__btn ${gridMode === 'shocks' ? 'seg__btn--on' : ''}`} onClick={() => setGridMode('shocks')} title="Shocks — click a row to isolate it and add manual shocks">Shocks</button>
-            </span>
-          </span>
           <Segmented value={granularity} onChange={setGranularity} />
-          <button className="btn btn--ghost" onClick={resetAll}>{isSummary ? 'Reset all' : 'Reset'}</button>
         </div>
       </header>
 
@@ -1082,6 +1065,7 @@ export default function App() {
               onAddShock={addShock}
               onCellClick={openUnderlying}
               onOpenModel={openModel}
+              onGridMode={setGridMode}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
               shockRanges={resolvedFocusShocks.map((s) => ({ start: s.dayStart, end: s.dayEnd }))}
             />
