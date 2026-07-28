@@ -61,7 +61,7 @@
   --dur-base: 200ms;
   --rail-width: 56px;
   --control-h: 36px; /* shared height for buttons and segmented controls */
-  --chip-h: 27px; /* the small capsules that sit beside the page title */
+  --chip-h: 28px; /* every small capsule: tab-bar toggles and title chips */
 
   /* ----- semantic layer (what the components consume) ----- */
   --bg: var(--uniun-gray-ultra-light);
@@ -282,7 +282,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 28px;
+  height: var(--chip-h);
   padding: 0 10px 0 13px;
   border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
   background: color-mix(in srgb, var(--brand) 10%, transparent);
@@ -379,7 +379,9 @@ body {
   font-weight: var(--fw-regular);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
-  padding: 5px 10px;
+  height: var(--chip-h);
+  line-height: 1;
+  padding: 0 10px;
   border-radius: var(--r-pill);
   cursor: pointer;
   white-space: nowrap;
