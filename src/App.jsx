@@ -161,6 +161,13 @@ export default function App() {
   const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 800))
   const [gridMode, setGridMode] = useState('base') // 'base' (click a cell → underlying data) | 'shocks' (click a row → isolate + add shocks)
   const [showContrib, setShowContrib] = useState(false) // contributions strip is tall — off by default
+  const [showScenario, setShowScenario] = useState(true) // the scenario/compare control line
+
+  // Sliding pink underline under whichever view is active (Group vs Local grids).
+  const viewtabsRef = useRef(null)
+  const groupTabRef = useRef(null)
+  const entityTabRef = useRef(null)
+  const [ink, setInk] = useState({ left: 0, width: 0 })
   const [labelW, setLabelW] = useState(LABEL_W_DEFAULT) // category column width, set by the splitter
   const [dragging, setDragging] = useState(false)
 
@@ -220,6 +227,24 @@ export default function App() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // Keep the underline on the active view. Re-measured on selection and on any
+  // resize of the tab strip — the capsule's label changes width with the grid.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const box = viewtabsRef.current
+      const el = isSummary ? groupTabRef.current : entityTabRef.current
+      if (!box || !el) return
+      const b = box.getBoundingClientRect()
+      const r = el.getBoundingClientRect()
+      setInk({ left: Math.round(r.left - b.left), width: Math.round(r.width) })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    if (viewtabsRef.current) ro.observe(viewtabsRef.current)
+    window.addEventListener('resize', measure)
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure) }
+  }, [isSummary, activeTab])
 
   // While dragging the splitter, stop the pointer selecting table text.
   useEffect(() => {
@@ -652,9 +677,23 @@ export default function App() {
   const contributions = useMemo(
     () =>
       ENTITIES.map((e) => {
-        const d = computeDaily(shockState(tabStates[e.id], shocksForTab(e.id)))
+        const eff = shockState(tabStates[e.id], shocksForTab(e.id))
+        const d = computeDaily(eff)
         const closingLocal = d.dailyClosing[d.dailyClosing.length - 1] ?? 0
-        return { id: e.id, company: e.company, currency: e.currency, fx: e.fx, gbpClosing: (closingLocal / e.fx) * groupCcy.fx }
+        const lowestLocal = d.dailyClosing.length ? Math.min(...d.dailyClosing) : 0
+        return {
+          id: e.id,
+          company: e.company,
+          currency: e.currency,
+          label: e.label,
+          fx: e.fx,
+          gbpClosing: (closingLocal / e.fx) * groupCcy.fx,
+          // local-currency figures for the entity picker's rich rows
+          closingLocal,
+          lowestLocal,
+          closingText: closingLocal.toLocaleString(e.locale, { style: 'currency', currency: e.currency, maximumFractionDigits: 0 }),
+          shocks: Object.values(shocksForTab(e.id)).reduce((n, a) => n + a.length, 0),
+        }
       }),
     [tabStates, groupCcy.fx, shocksForTab]
   )
@@ -717,19 +756,34 @@ export default function App() {
       <div className="tabbar">
         <span className="tabbar__brand">Cash Forecast</span>
         <div className="tabbar__tabs">
-          {TABS.map((t) => (
-            <span key={t.id} className="tabbar__tabwrap">
-              <button
-                className={`tab ${t.id === activeTab ? 'tab--on' : ''} ${t.summary ? 'tab--summary' : ''}`}
-                onClick={() => setActiveTab(t.id)}
-                title={t.summary ? 'Consolidated group view (GBP)' : `${t.company} · ${t.currency}`}
-              >
-                {t.summary && <span className="tab__sigma" aria-hidden>Σ</span>}
-                {t.label}
-              </button>
-              {t.summary && <span className="tabbar__div" aria-hidden />}
+          {/* Group vs Local grids, with one pink underline that slides between
+              them to mark which view is active. */}
+          <span className="viewtabs" ref={viewtabsRef}>
+            <button
+              ref={groupTabRef}
+              className={`tab tab--summary ${isSummary ? 'tab--on' : ''}`}
+              onClick={() => setActiveTab(SUMMARY.id)}
+              title="Consolidated group view"
+            >
+              <span className="tab__sigma" aria-hidden>Σ</span>
+              {SUMMARY.label}
+            </button>
+            <span className="tabbar__div" aria-hidden />
+            {/* the four local grids live behind one picker rather than four tabs */}
+            <span className="viewtabs__slot" ref={entityTabRef}>
+              <EntityPicker
+                entities={ENTITIES}
+                details={contributions}
+                activeTab={activeTab}
+                groupFmt={groupFmt}
+                groupCcyCode={groupCcy.code}
+                groupClosing={groupClosing}
+                onSelect={setActiveTab}
+              />
             </span>
-          ))}
+            <span className="viewtabs__ink" style={ink} aria-hidden />
+          </span>
+          <span className="tabbar__div" aria-hidden />
           <button
             className={`contribbtn ${showContrib ? 'contribbtn--on' : ''}`}
             onClick={() => setShowContrib((v) => !v)}
@@ -743,17 +797,21 @@ export default function App() {
             </svg>
             Contributions
           </button>
+          <button
+            className={`contribbtn ${showScenario ? 'contribbtn--on' : ''}`}
+            onClick={() => setShowScenario((v) => !v)}
+            aria-pressed={showScenario}
+            title={showScenario ? 'Hide the scenario controls' : 'Show the scenario controls'}
+          >
+            {/* two paths diverging from a common baseline */}
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M2 17c4 0 5-10 9-10s5 5 11 5" />
+              <path d="M2 17c4 0 6-4 10-4s6 2 10 2" opacity="0.45" />
+            </svg>
+            Scenarios
+          </button>
         </div>
         <span className="tabbar__meta">{tab.company} · {displayCurrency}</span>
-        <button
-          className={`shocksbtn ${shocksOpen ? 'shocksbtn--on' : ''}`}
-          onClick={() => setShocksOpen((o) => !o)}
-          title="Manual shocks"
-          aria-label="Manual shocks"
-        >
-          <ShockIcon size={16} />
-          {totalShocks > 0 && <span className="shocksbtn__count">{totalShocks}</span>}
-        </button>
       </div>
 
       <header className="app__header">
@@ -868,31 +926,53 @@ export default function App() {
               <span className="tag tag--manual">Manual</span>
             )}
           </span>
-          <span className="scenariobar__label scenariobar__label--sub">Compare</span>
-          <OverlayDropdown
-            base={dropdownBase}
-            baseName={focusRow.name}
-            overlays={overlays}
-            overlayId={overlayId}
-            onOverlay={setOverlayId}
-            bandIds={bandIds}
-            onToggleBand={toggleBand}
-          />
-          {overlayId !== 'none' && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
+          {/* the scenario controls hide with the toggle, but the bar itself stays
+              — it carries the only way back out of the isolated view */}
+          {showScenario && (
+            <>
+              <span className="scenariobar__label scenariobar__label--sub">Scenario</span>
+              <OverlayDropdown
+                base={dropdownBase}
+                baseName={focusRow.name}
+                overlays={overlays}
+                overlayId={overlayId}
+                onOverlay={setOverlayId}
+                bandIds={bandIds}
+                onToggleBand={toggleBand}
+              />
+              {overlayId !== 'none' && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
+            </>
+          )}
+          <button
+            className={`btn btn--sm shockapply ${shocksOpen ? 'shockapply--on' : ''}`}
+            onClick={() => setShocksOpen((o) => !o)}
+            aria-pressed={shocksOpen}
+            title="Open the manual shocks panel"
+          >
+            <ShockIcon size={13} />
+            Apply shocks
+            {totalShocks > 0 && <span className="shockapply__count">{totalShocks}</span>}
+          </button>
           <button className="btn btn--sm" onClick={() => setFocus(null)}>← Back to balance</button>
         </div>
-      ) : (
+      ) : showScenario || activeShockCount > 0 ? (
         <div className="scenariobar">
-          <span className="scenariobar__label">Compare</span>
-          <OverlayDropdown
-            base={base}
-            overlays={overlays}
-            overlayId={overlayId}
-            onOverlay={setOverlayId}
-            bandIds={bandIds}
-            onToggleBand={toggleBand}
-          />
-          {overlayId !== 'none' && !divergeShocks && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
+          {/* Diverge shocks is a shock control, not a scenario one, so it stays
+              put when the scenario controls are hidden. */}
+          {showScenario && (
+            <>
+              <span className="scenariobar__label">Scenario</span>
+              <OverlayDropdown
+                base={base}
+                overlays={overlays}
+                overlayId={overlayId}
+                onOverlay={setOverlayId}
+                bandIds={bandIds}
+                onToggleBand={toggleBand}
+              />
+              {overlayId !== 'none' && !divergeShocks && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
+            </>
+          )}
           {activeShockCount > 0 && (
             <button
               className={`btn btn--sm divergebtn ${divergeShocks ? 'divergebtn--on' : ''}`}
@@ -903,9 +983,21 @@ export default function App() {
               Diverge shocks
             </button>
           )}
-          <span className="scenariobar__hint">± toggles each series' forecast error band · click a category's ⟋ icon to isolate its flow</span>
+          <button
+            className={`btn btn--sm shockapply ${shocksOpen ? 'shockapply--on' : ''}`}
+            onClick={() => setShocksOpen((o) => !o)}
+            aria-pressed={shocksOpen}
+            title="Open the manual shocks panel"
+          >
+            <ShockIcon size={13} />
+            Apply shocks
+            {totalShocks > 0 && <span className="shockapply__count">{totalShocks}</span>}
+          </button>
+          {showScenario && (
+            <span className="scenariobar__hint">± toggles each series' forecast error band · click a category's ⟋ icon to isolate its flow</span>
+          )}
         </div>
-      )}
+      ) : null}
 
       {/* One scroll container so chart + table move and align together */}
       <section className={`aligned ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
@@ -1092,6 +1184,87 @@ function Segmented({ value, onChange }) {
 
 // Dropdown: Base is always shown (with its own band toggle); pick at most one
 // scenario to overlay, and toggle the forecast error band per series.
+// The four local grids behind one capsule. The menu is "rich": each row carries
+// that grid's closing balance, share of the group and any shocks on it, so you
+// can pick a grid on its numbers rather than just its code.
+function EntityPicker({ entities, details, activeTab, groupFmt, groupCcyCode, groupClosing, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const onKey = (e) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const active = entities.find((e) => e.id === activeTab)
+  const byId = Object.fromEntries(details.map((d) => [d.id, d]))
+
+  return (
+    <span className={`entpick ${open ? 'entpick--open' : ''}`} ref={ref}>
+      <button
+        className={`entpick__btn ${active ? 'entpick__btn--on' : ''}`}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={active ? `${active.company} · ${active.currency}` : 'Choose a local grid'}
+      >
+        {active
+          ? <><span className="entpick__co">{active.company}</span><span className="entpick__ccy">{active.currency}</span></>
+          : <><span className="entpick__co">Local grids</span><span className="entpick__ccy">{entities.length}</span></>}
+        <svg className="entpick__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M4 6.5 8 10.5 12 6.5" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="entpick__menu" role="listbox">
+          <div className="entpick__head">Local grids</div>
+          {entities.map((e, i) => {
+            const d = byId[e.id] || {}
+            const share = groupClosing ? Math.round((d.gbpClosing / groupClosing) * 100) : 0
+            const on = e.id === activeTab
+            return (
+              <button
+                key={e.id}
+                className={`entrow ${on ? 'entrow--on' : ''}`}
+                role="option"
+                aria-selected={on}
+                onClick={() => { onSelect(e.id); setOpen(false) }}
+              >
+                <span className="entrow__dot" style={{ background: CONTRIB_COLORS[i % CONTRIB_COLORS.length] }} />
+                <span className="entrow__main">
+                  <span className="entrow__co">{e.company}</span>
+                  <span className="entrow__meta">
+                    <span className="entrow__ccy">{e.currency}</span>
+                    <span className="entrow__share">{share}% of group</span>
+                    {d.shocks > 0 && (
+                      <span className="entrow__shocks"><ShockIcon size={10} />{d.shocks}</span>
+                    )}
+                  </span>
+                </span>
+                <span className="entrow__figs">
+                  <span className="entrow__closing">{d.closingText}</span>
+                  {/* the group-currency equivalent only adds anything when the
+                      local currency differs from the group's */}
+                  <span className="entrow__sub">
+                    {d.currency === groupCcyCode ? 'closing' : `closing · ${groupFmt.format(d.gbpClosing || 0)}`}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </span>
+  )
+}
+
 // The group's display currency, edited in place in the page title. A custom
 // menu rather than a <select>, since a native popup can't carry the app's theme.
 function CurrencyPicker({ value, onChange }) {

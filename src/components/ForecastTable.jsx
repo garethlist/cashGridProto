@@ -86,10 +86,10 @@ export default function ForecastTable({
           dashNum={dashNum}
           span={buckets.length}
         />
-        {!collapsed.inflows &&
-          inflowRows.map((row) => (
+        {inflowRows.map((row) => (
             <LineRow
               key={row.id}
+              hidden={!!collapsed.inflows}
               section="inflows"
               row={row}
               buckets={buckets}
@@ -120,10 +120,10 @@ export default function ForecastTable({
           dashNum={dashNum}
           span={buckets.length}
         />
-        {!collapsed.outflows &&
-          outflowRows.map((row) => (
+        {outflowRows.map((row) => (
             <LineRow
               key={row.id}
+              hidden={!!collapsed.outflows}
               section="outflows"
               row={row}
               buckets={buckets}
@@ -177,8 +177,14 @@ export default function ForecastTable({
 }
 
 function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, values, dashNum, span }) {
+  // The whole header row toggles the section; the caret and + keep their own
+  // handlers, so ignore clicks that land on a button (they'd double-fire).
+  const onRowClick = (e) => {
+    if (e.target.closest('button')) return
+    onToggle()
+  }
   return (
-    <tr className={`grid__section grid__section--${tone}`}>
+    <tr className={`grid__section grid__section--${tone}`} onClick={onRowClick}>
       <td className="grid__rowhead">
         <span className="rowhead__inner">
           <button className="caret" onClick={onToggle} aria-expanded={!collapsed} title={collapsed ? 'Expand' : 'Collapse'}>
@@ -213,7 +219,7 @@ function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, valu
   )
 }
 
-function LineRow({ section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
+function LineRow({ hidden, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
   const shocksMode = gridMode === 'shocks'
   // Shocks mode: clicking anywhere on the row drills into it — except on
   // interactive controls (the name field, cell inputs, and the row buttons).
@@ -224,8 +230,9 @@ function LineRow({ section, row, buckets, editable, dashNum, onCell, onRowName, 
   }
   return (
     <tr
-      className={`grid__row grid__row--item ${focused ? 'grid__row--focused' : ''}`}
+      className={`grid__row grid__row--item ${focused ? 'grid__row--focused' : ''} ${hidden ? 'grid__row--hidden' : ''}`}
       onClick={onRowClick}
+      aria-hidden={hidden || undefined}
     >
       <td className="grid__rowhead grid__rowhead--item">
         <span className="rowhead__inner">
