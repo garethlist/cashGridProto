@@ -162,7 +162,9 @@ function ShockEditor({ s, itemKey, days, symbol, groupBy, activeTab, onGoToSourc
           title={open ? 'Collapse' : 'Expand'}
           aria-label="Toggle details"
         >
-          ▸
+          <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M6 3.5 10.5 8 6 12.5" />
+          </svg>
         </button>
         <input
           className="shockedit__reasonfield"

@@ -1,15 +1,22 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregate, makeInitialState, consolidate, applyShocks, shockState, cellUnderlying, uid, monthOrdinals, SCENARIOS } from './model.js'
+import { computeDaily, bucketize, aggregate, makeInitialState, consolidate, applyShocks, shockState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
 import ShocksPanel from './components/ShocksPanel.jsx'
 import UnderlyingPanel from './components/UnderlyingPanel.jsx'
+import ModelPanel from './components/ModelPanel.jsx'
 import ShockIcon from './components/ShockIcon.jsx'
 import CategoryTag from './components/CategoryTag.jsx'
 import { CurrencyProvider, useMoney } from './currency.jsx'
 
 // Shared column geometry — the single source of alignment between chart & table.
-const LABEL_W = 260
+// Wide enough for the row name plus its badges/controls once the full-bleed
+// table's left gutter inset is taken off.
+// Category column width. Draggable via the splitter on the chart/table divider,
+// clamped so neither the labels nor the data columns can be squeezed out.
+const LABEL_W_DEFAULT = 320
+const LABEL_W_MIN = 200
+const LABEL_W_MAX = 560
 const CHART_H = 300
 
 // How many columns should fill the window by default, per granularity.
@@ -30,6 +37,7 @@ const GRANULARITIES = [
 const BASE_CCY = 'GBP'
 const SUMMARY = { id: 'summary', label: 'GROUP', company: 'Group', currency: BASE_CCY, locale: 'en-GB', summary: true }
 // Currencies the consolidated group can be displayed in (fx = GBP → currency).
+const CCY_SYMBOL = { GBP: '£', EUR: '€', USD: '$', DKK: 'kr' }
 const GROUP_CURRENCIES = [
   { code: 'GBP', locale: 'en-GB', fx: 1 },
   { code: 'EUR', locale: 'de-DE', fx: 1.17 },
@@ -77,7 +85,8 @@ const ENTITIES = [
 ]
 const TABS = [SUMMARY, ...ENTITIES]
 const makeEntity = (e) => makeInitialState({ scale: e.fx * e.size, seed: e.seed, profile: e.profile })
-const CONTRIB_COLORS = ['#3b6cff', '#0ca678', '#f08c00', '#ae3ec9']
+// Uniun brand palette — blue / teal / orange / purple
+const CONTRIB_COLORS = ['#0078ff', '#16bba4', '#ff9600', '#b849ff']
 
 // Track the available width of an element (excludes scrollbar), live on resize.
 function useMeasuredWidth() {
@@ -151,6 +160,40 @@ export default function App() {
   const [scratchClosing, setScratchClosing] = useState(false) // plays the exit animation before unmounting
   const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 800))
   const [gridMode, setGridMode] = useState('base') // 'base' (click a cell → underlying data) | 'shocks' (click a row → isolate + add shocks)
+  const [showContrib, setShowContrib] = useState(false) // contributions strip is tall — off by default
+  const [labelW, setLabelW] = useState(LABEL_W_DEFAULT) // category column width, set by the splitter
+  const [dragging, setDragging] = useState(false)
+
+  // Splitter: drag the chart/table divider to resize the category column.
+  // The start width is read from a ref, not a closure over `labelW` — a stale
+  // capture here makes the column jump to the wrong size on drag.
+  const dragRef = useRef(null)
+  const labelWRef = useRef(LABEL_W_DEFAULT)
+  useEffect(() => { labelWRef.current = labelW }, [labelW])
+  const onSplitterDown = useCallback((e) => {
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startW: labelWRef.current }
+    setDragging(true)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }, [])
+  const onSplitterMove = useCallback((e) => {
+    const d = dragRef.current
+    if (!d) return
+    const next = d.startW + (e.clientX - d.startX)
+    setLabelW(Math.min(LABEL_W_MAX, Math.max(LABEL_W_MIN, Math.round(next))))
+  }, [])
+  const onSplitterUp = useCallback((e) => {
+    dragRef.current = null
+    setDragging(false)
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+  }, [])
+  // Keyboard nudge + double-click to restore the default width.
+  const onSplitterKey = useCallback((e) => {
+    const step = e.shiftKey ? 40 : 10
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setLabelW((w) => Math.max(LABEL_W_MIN, w - step)) }
+    if (e.key === 'ArrowRight') { e.preventDefault(); setLabelW((w) => Math.min(LABEL_W_MAX, w + step)) }
+    if (e.key === 'Home') { e.preventDefault(); setLabelW(LABEL_W_DEFAULT) }
+  }, [])
   const [focus, setFocus] = useState(null) // { section, id } — isolate a category's flow in the chart
   const [underlying, setUnderlying] = useState(null) // { section, row, bucket, data } for the Base-mode detail panel
 
@@ -177,6 +220,18 @@ export default function App() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // While dragging the splitter, stop the pointer selecting table text.
+  useEffect(() => {
+    if (!dragging) return undefined
+    const prev = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    return () => {
+      document.body.style.userSelect = prev
+      document.body.style.cursor = ''
+    }
+  }, [dragging])
 
   // While the scratchpad is open, lock background scroll and let Esc close it.
   useEffect(() => {
@@ -338,6 +393,35 @@ export default function App() {
     setUnderlying({ section, row, bucket, data })
   }, [effectiveState, state.days])
   const closeUnderlying = useCallback(() => setUnderlying(null), [])
+
+  // Model detail sheet, opened from the right-hand half of a category capsule.
+  const [modelRow, setModelRow] = useState(null)
+  const [modelClosing, setModelClosing] = useState(false)
+  const openModel = useCallback((section, row) => {
+    setModelClosing(false)
+    setModelRow({ ...row, section })
+  }, [])
+  const closeModel = useCallback(() => {
+    setModelClosing(true)
+    window.setTimeout(() => { setModelRow(null); setModelClosing(false) }, 200)
+  }, [])
+  useEffect(() => {
+    if (!modelRow) return undefined
+    const onKey = (e) => e.key === 'Escape' && closeModel()
+    // Click anywhere off the tray to dismiss it, so you never have to travel
+    // back up to the Close button. Clicks on a capsule button are left alone —
+    // those switch the tray to another category rather than closing it.
+    const onDown = (e) => {
+      if (e.target.closest('.modelpanel') || e.target.closest('.catcap__btn')) return
+      closeModel()
+    }
+    window.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [modelRow, closeModel])
 
   const ordinals = useMemo(() => monthOrdinals(state.days), [state.days])
 
@@ -512,12 +596,14 @@ export default function App() {
   }, [isSummary, focusRow, focusShocks, focusKey, shocks, state.inflows, state.outflows, activeTab])
 
   // Size columns so the target count fills the measured width; scroll for more.
+  // Widening the category column takes space from the data columns (and vice
+  // versa), so dragging the splitter re-proportions every period column.
   const [scrollRef, availW] = useMeasuredWidth()
   const target = TARGET_COLS[granularity]
   const colW = availW > 0
-    ? Math.max(MIN_COL_W[granularity], Math.floor((availW - LABEL_W) / target))
+    ? Math.max(MIN_COL_W[granularity], Math.floor((availW - labelW) / target))
     : MIN_COL_W[granularity]
-  const contentW = LABEL_W + buckets.length * colW
+  const contentW = labelW + buckets.length * colW
   // Chart grows to use vertical space in the full-screen scratchpad view.
   const chartH = scratchpad ? Math.max(340, Math.round(viewportH * 0.46)) : CHART_H
 
@@ -550,10 +636,6 @@ export default function App() {
         },
       ],
     }))
-  }, [])
-
-  const removeRow = useCallback((section, rowId) => {
-    setState((s) => ({ ...s, [section]: s[section].filter((r) => r.id !== rowId) }))
   }, [])
 
   const resetAll = useCallback(() => {
@@ -628,6 +710,8 @@ export default function App() {
 
   return (
     <CurrencyProvider currency={displayCurrency} locale={displayLocale}>
+    <div className="shell">
+    <UniunRail theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
     <div className={`app ${underlying ? 'app--docked' : ''}`}>
       {/* view tabs — company / currency grid combinations */}
       <div className="tabbar">
@@ -646,7 +730,19 @@ export default function App() {
               {t.summary && <span className="tabbar__div" aria-hidden />}
             </span>
           ))}
-          <button className="tab tab--add" title="Add view (demo)">+</button>
+          <button
+            className={`contribbtn ${showContrib ? 'contribbtn--on' : ''}`}
+            onClick={() => setShowContrib((v) => !v)}
+            aria-pressed={showContrib}
+            title={showContrib ? 'Hide the group contributions strip' : 'Show the group contributions strip'}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden>
+              <rect x="2" y="9" width="7" height="6" rx="1.5" fill="currentColor" />
+              <rect x="10" y="9" width="5" height="6" rx="1.5" fill="currentColor" opacity="0.62" />
+              <rect x="16" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity="0.34" />
+            </svg>
+            Contributions
+          </button>
         </div>
         <span className="tabbar__meta">{tab.company} · {displayCurrency}</span>
         <button
@@ -658,35 +754,36 @@ export default function App() {
           <ShockIcon size={16} />
           {totalShocks > 0 && <span className="shocksbtn__count">{totalShocks}</span>}
         </button>
-        <ThemeToggle theme={theme} onToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
       </div>
 
       <header className="app__header">
         <div>
+          {/* The descriptive caption lives in the pill's tooltip rather than a
+              subtitle line, to keep the header short. */}
           <h1>
-            {tab.company} <span className="app__ccy">{displayCurrency}</span>
-            {isSummary && <span className="pill pill--readonly" title="Consolidation is read-only — edit on entity tabs">Σ Consolidated · read-only</span>}
+            <span>{tab.company}</span>
+            {isSummary ? (
+              /* the group can be re-denominated, so its currency is editable
+                 in place; entity grids show their own currency as plain text */
+              <CurrencyPicker value={groupCurrency} onChange={setGroupCurrency} />
+            ) : (
+              <span className="app__ccy">{displayCurrency}</span>
+            )}
+            {isSummary && (
+              <span
+                className="pill pill--readonly"
+                tabIndex={0}
+                data-tip={`Consolidation of ${ENTITIES.map((e) => e.company).join(', ')}, shown in ${displayCurrency}. Edit figures on each entity tab.`}
+              >
+                Σ Consolidated · read-only
+              </span>
+            )}
           </h1>
-          <p className="app__subtitle">
-            {isSummary
-              ? `Consolidation of ${ENTITIES.map((e) => e.company).join(', ')}, shown in ${displayCurrency}. Edit figures on each entity tab.`
-              : `Daily cashflow, aggregated into ${granularity === 'day' ? 'days' : granularity === 'week' ? 'weeks' : 'months'} — the chart tracks the daily balance beneath each column.`}
-          </p>
         </div>
         <div className="app__controls">
-          {isSummary && (
-            <label className="ccypick">
-              <span className="ccypick__label">Show in</span>
-              <select className="ccypick__select" value={groupCurrency} onChange={(e) => setGroupCurrency(e.target.value)}>
-                {GROUP_CURRENCIES.map((c) => (
-                  <option key={c.code} value={c.code}>{c.code}</option>
-                ))}
-              </select>
-            </label>
-          )}
           <span className="modepick">
             <span className="modepick__label">Mode</span>
-            <span className="seg seg--sm">
+            <span className="seg">
               <button className={`seg__btn ${gridMode === 'base' ? 'seg__btn--on' : ''}`} onClick={() => setGridMode('base')} title="Base — click a cell to see the underlying data behind it">Base</button>
               <button className={`seg__btn ${gridMode === 'shocks' ? 'seg__btn--on' : ''}`} onClick={() => setGridMode('shocks')} title="Shocks — click a row to isolate it and add manual shocks">Shocks</button>
             </span>
@@ -696,6 +793,7 @@ export default function App() {
         </div>
       </header>
 
+      {showContrib && (
       <section className="contrib">
         <span className="contrib__label">
           Contributions to group closing ({groupCcy.code})
@@ -732,6 +830,7 @@ export default function App() {
           ))}
         </div>
       </section>
+      )}
 
       <section className="metrics">
         <Metric label="Opening balance" value={state.openingBalance} />
@@ -809,7 +908,7 @@ export default function App() {
       )}
 
       {/* One scroll container so chart + table move and align together */}
-      <section className={`panel aligned ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
+      <section className={`aligned ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
         {scratchpad && (
           <div className="scratchbar">
             <span className="scratchbar__title">
@@ -832,6 +931,28 @@ export default function App() {
             </svg>
           </button>
         )}
+        {/* Draggable splitter sitting on the category/data divider. The label
+            column is sticky, so this stays put while the columns scroll. */}
+        <div
+          className={`splitter ${dragging ? 'splitter--on' : ''}`}
+          style={{ left: labelW }}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the category column"
+          aria-valuenow={labelW}
+          aria-valuemin={LABEL_W_MIN}
+          aria-valuemax={LABEL_W_MAX}
+          tabIndex={0}
+          title="Drag to resize the category column (double-click to reset)"
+          onPointerDown={onSplitterDown}
+          onPointerMove={onSplitterMove}
+          onPointerUp={onSplitterUp}
+          onPointerCancel={onSplitterUp}
+          onDoubleClick={() => setLabelW(LABEL_W_DEFAULT)}
+          onKeyDown={onSplitterKey}
+        >
+          <span className="splitter__grip" aria-hidden />
+        </div>
         <div className="aligned__scroll" ref={scrollRef}>
           <div className="aligned__content" style={{ width: contentW }}>
             <AlignedChart
@@ -839,7 +960,7 @@ export default function App() {
               lines={lines}
               dailyNet={daily.dailyNet}
               buckets={buckets}
-              labelW={LABEL_W}
+              labelW={labelW}
               colW={colW}
               contentW={contentW}
               height={chartH}
@@ -854,14 +975,13 @@ export default function App() {
               buckets={buckets}
               agg={agg}
               granularity={granularity}
-              labelW={LABEL_W}
+              labelW={labelW}
               colW={colW}
               contentW={contentW}
               onCell={setCell}
               onRowName={setRowName}
               onOpeningBalance={setOpeningBalance}
               onAddRow={addRow}
-              onRemoveRow={removeRow}
               readOnly={isSummary}
               gridMode={gridMode}
               focus={focus}
@@ -869,15 +989,21 @@ export default function App() {
               onFocus={toggleFocus}
               onAddShock={addShock}
               onCellClick={openUnderlying}
+              onOpenModel={openModel}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
               shockRanges={resolvedFocusShocks.map((s) => ({ start: s.dayStart, end: s.dayEnd }))}
             />
           </div>
         </div>
-        {granularity !== 'day' && !scratchpad && (
-          <p className="aligned__hint">
-            Showing aggregated {granularity === 'week' ? 'weekly' : 'monthly'} totals. Switch to <strong>Days</strong> to edit individual cells.
-          </p>
+        {modelRow && (
+          <ModelPanel
+            row={modelRow}
+            detail={modelDetail(modelRow)}
+            closing={modelClosing}
+            /* sits directly below the chart, so it fills the table's area */
+            topOffset={chartH + (gridHasShocks || annotations.length > 0 ? 26 : 0)}
+            onClose={closeModel}
+          />
         )}
       </section>
 
@@ -901,7 +1027,48 @@ export default function App() {
         onClose={closeUnderlying}
       />
     </div>
+    </div>
     </CurrencyProvider>
+  )
+}
+
+// The Uniun signature: a 56px black rail carrying the brand mark and the app
+// switcher. This grid is the "Forecast" app (pink in the Uniun app taxonomy).
+function UniunRail({ theme, onToggleTheme }) {
+  const apps = [
+    { id: 'forecast', label: 'Forecast', color: 'var(--app-forecast)', on: true },
+    { id: 'core', label: 'Core', color: 'var(--uniun-teal)' },
+    { id: 'payments', label: 'Payments', color: 'var(--uniun-blue)' },
+    { id: 'journal', label: 'Journal', color: 'var(--uniun-purple)' },
+    { id: 'pulse', label: 'Pulse', color: 'var(--uniun-cyan)' },
+  ]
+  return (
+    <nav className="rail" aria-label="Uniun apps">
+      <span className="rail__brand" title="Uniun">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
+          <path d="M12 2.2 20.5 7v10L12 21.8 3.5 17V7z" fill="none" stroke="var(--uniun-green)" strokeWidth="2" strokeLinejoin="round" />
+          <path d="M12 8.1 16.3 10.6v4.9L12 18l-4.3-2.5v-4.9z" fill="var(--uniun-green)" />
+        </svg>
+      </span>
+      <span className="rail__apps">
+        {apps.map((a) => (
+          <button
+            key={a.id}
+            className={`railapp ${a.on ? 'railapp--on' : ''}`}
+            style={{ '--app-color': a.color }}
+            title={a.on ? `${a.label} (current)` : `${a.label} — not in this prototype`}
+            aria-current={a.on ? 'page' : undefined}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+              <path d="M12 2.8 19.6 7.4v9.2L12 21.2 4.4 16.6V7.4z" fill="currentColor" />
+            </svg>
+          </button>
+        ))}
+      </span>
+      <span className="rail__foot">
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+      </span>
+    </nav>
   )
 }
 
@@ -925,6 +1092,59 @@ function Segmented({ value, onChange }) {
 
 // Dropdown: Base is always shown (with its own band toggle); pick at most one
 // scenario to overlay, and toggle the forecast error band per series.
+// The group's display currency, edited in place in the page title. A custom
+// menu rather than a <select>, since a native popup can't carry the app's theme.
+function CurrencyPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const onKey = (e) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <span className={`ccypick ${open ? 'ccypick--open' : ''}`} ref={ref}>
+      <button
+        className="ccypick__btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Group currency: ${value}. Change it.`}
+        title="Change the currency the group is shown in"
+      >
+        {value}
+        <svg className="ccypick__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M4 6.5 8 10.5 12 6.5" />
+        </svg>
+      </button>
+      {open && (
+        <span className="ccypick__menu" role="listbox">
+          {GROUP_CURRENCIES.map((c) => (
+            <button
+              key={c.code}
+              className={`ccypick__opt ${c.code === value ? 'ccypick__opt--on' : ''}`}
+              role="option"
+              aria-selected={c.code === value}
+              onClick={() => { onChange(c.code); setOpen(false) }}
+            >
+              <span className="ccypick__code">{c.code}</span>
+              <span className="ccypick__sym">{CCY_SYMBOL[c.code]}</span>
+              {c.code === value && <span className="ccypick__tick" aria-hidden>✓</span>}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function OverlayDropdown({ base, baseName = 'Base', overlays, overlayId, onOverlay, bandIds, onToggleBand }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)

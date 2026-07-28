@@ -387,6 +387,60 @@ export function cellUnderlying(row, bucket, dailyValues, days) {
   return { kind: 'invoice', party, total, groups, other }
 }
 
+// ---- model detail (capsule → model panel) ----------------------------------
+// Plausible, deterministic metadata for the model behind a category. Stands in
+// for what a real model registry would return.
+const MODEL_BLURB = {
+  SARIMA: 'Seasonal ARIMA on daily receipts, with weekday and month-end seasonality terms fitted per entity.',
+  'Seasonal Naïve': 'Carries the value from the same point in the previous season forward. A deliberately simple, hard-to-beat baseline.',
+  'Holt-Winters': 'Triple exponential smoothing over level, trend and seasonality — responsive to recent shifts without overfitting.',
+  'Componentised Payroll Model': 'Builds payroll bottom-up from headcount, contracted salary, employer NI and pension, then lands it on each pay date.',
+  XGBoost: 'Gradient-boosted trees over supplier payment-term features, invoice ageing buckets and historical settlement behaviour.',
+  Chronos: 'Pretrained time-series foundation model, zero-shot over the marketing spend history with a light fine-tune per entity.',
+}
+const MODEL_DRIVERS = {
+  SARIMA: ['Invoice register', 'Customer payment terms', 'Weekday seasonality', 'Month-end effect'],
+  'Seasonal Naïve': ['Prior-season actuals', 'Calendar alignment'],
+  'Holt-Winters': ['Level', 'Trend', 'Seasonal index'],
+  'Componentised Payroll Model': ['Headcount', 'Contracted salary', 'Employer NI', 'Pension contributions', 'Pay calendar'],
+  XGBoost: ['Supplier terms', 'Invoice ageing', 'Settlement history', 'Purchase orders'],
+  Chronos: ['Spend history', 'Campaign calendar', 'Channel mix'],
+}
+
+export function modelDetail(row) {
+  if (!row.modelled || !row.model) {
+    return {
+      manual: true,
+      name: 'Manual entry',
+      category: 'Manual',
+      blurb: 'Entered by hand and not produced by a model. Values flow through the forecast exactly as typed.',
+      drivers: [],
+      owner: 'Treasury',
+      stats: [],
+    }
+  }
+  const rng = mulberry32(hashStr(`${row.id}|${row.model.name}`))
+  const mape = (2.5 + rng() * 6).toFixed(1)
+  const bias = (rng() * 3 - 1.5).toFixed(1)
+  const cover = (88 + rng() * 10).toFixed(0)
+  const months = 12 + Math.floor(rng() * 24)
+  return {
+    manual: false,
+    name: row.model.name,
+    category: row.model.category,
+    blurb: MODEL_BLURB[row.model.name] ?? 'Statistical forecast fitted on this category’s history.',
+    drivers: MODEL_DRIVERS[row.model.name] ?? ['Historical actuals'],
+    owner: row.model.category === 'Custom R&D' ? 'Treasury R&D' : row.model.category === 'ML/AI' ? 'Data Science' : 'Treasury Analytics',
+    retrain: row.model.category === 'ML/AI' ? 'Weekly' : 'Monthly',
+    trainedOn: `${months} months of history`,
+    stats: [
+      { label: 'MAPE', value: `${mape}%`, hint: 'Mean absolute percentage error, backtested' },
+      { label: 'Bias', value: `${bias > 0 ? '+' : ''}${bias}%`, hint: 'Average signed error — positive means over-forecasting' },
+      { label: 'Coverage', value: `${cover}%`, hint: 'Share of actuals falling inside the 80% prediction interval' },
+    ],
+  }
+}
+
 function monthGroups(days) {
   const groups = new Map()
   days.forEach((iso, i) => {
@@ -482,16 +536,16 @@ export function makeInitialState(opts = {}) {
     // Each category carries: a swatch colour, whether it is modelled (⚡) or
     // entered manually (👤), and — when modelled — the model that forecasts it.
     inflows: [
-      { id: uid('r'), name: 'Customer Receipts', code: 'ARE', color: '#22a06b', values: sc(receipts), modelled: true, model: { name: 'SARIMA', category: 'Statistical' } },
-      { id: uid('r'), name: 'Loan Drawdown', code: 'ARI', color: '#4a9de0', values: sc(loan), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
-      { id: uid('r'), name: 'Other Income', code: 'AREX', color: '#12b5b0', values: sc(otherInc), modelled: true, model: { name: 'Holt-Winters', category: 'Statistical' } },
+      { id: uid('r'), name: 'Customer Receipts', code: 'ARE', color: '#00c089', values: sc(receipts), modelled: true, model: { name: 'SARIMA', category: 'Statistical' } },
+      { id: uid('r'), name: 'Loan Drawdown', code: 'ARI', color: '#0078ff', values: sc(loan), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
+      { id: uid('r'), name: 'Other Income', code: 'AREX', color: '#16bba4', values: sc(otherInc), modelled: true, model: { name: 'Holt-Winters', category: 'Statistical' } },
     ],
     outflows: [
-      { id: uid('r'), name: 'Payroll', code: 'SALARIES', color: '#e5793a', values: sc(payroll), modelled: true, model: { name: 'Componentised Payroll Model', category: 'Custom R&D' } },
-      { id: uid('r'), name: 'Rent & Facilities', code: 'PAIT', color: '#7d6bd6', values: sc(rent), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
-      { id: uid('r'), name: 'Suppliers', code: 'APE', color: '#d94f9a', values: sc(suppliers), modelled: true, model: { name: 'XGBoost', category: 'ML/AI' } },
-      { id: uid('r'), name: 'Marketing', code: 'APIX', color: '#e0a92b', values: sc(marketing), modelled: true, model: { name: 'Chronos', category: 'ML/AI' } },
-      { id: uid('r'), name: 'Tax & VAT', code: 'TAX', color: '#8a94a6', values: sc(tax), modelled: false, model: null },
+      { id: uid('r'), name: 'Payroll', code: 'SALARIES', color: '#ff9600', values: sc(payroll), modelled: true, model: { name: 'Componentised Payroll Model', category: 'Custom R&D' } },
+      { id: uid('r'), name: 'Rent & Facilities', code: 'PAIT', color: '#b849ff', values: sc(rent), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
+      { id: uid('r'), name: 'Suppliers', code: 'APE', color: '#de4383', values: sc(suppliers), modelled: true, model: { name: 'XGBoost', category: 'ML/AI' } },
+      { id: uid('r'), name: 'Marketing', code: 'APIX', color: '#ffd621', values: sc(marketing), modelled: true, model: { name: 'Chronos', category: 'ML/AI' } },
+      { id: uid('r'), name: 'Tax & VAT', code: 'TAX', color: '#858585', values: sc(tax), modelled: false, model: null },
     ],
   }
 }
