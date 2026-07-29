@@ -315,6 +315,57 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
   }
 }
 
+// ---- scoping (a grid narrowed to some bank accounts) -----------------------
+// Split an entity's opening balance across its accounts by weight. The parts
+// always add back to the whole — the rounding remainder lands on the primary
+// account — so account grids reconcile exactly to their company and to GROUP.
+export function accountOpenings(state) {
+  const accts = state.accounts ?? []
+  if (!accts.length) return {}
+  const total = Number(state.openingBalance) || 0
+  const weights = accts.map((a) => (a.openShare != null ? a.openShare : 1))
+  const sum = weights.reduce((s, w) => s + w, 0) || 1
+  const out = {}
+  let rest = 0
+  accts.forEach((a, i) => {
+    if (i === 0) return
+    out[a.id] = Math.round((total * weights[i]) / sum)
+    rest += out[a.id]
+  })
+  out[accts[0].id] = total - rest
+  return out
+}
+
+// Build one state from the rows that move through a given set of bank accounts,
+// drawn from any number of entities and expressed in a single currency.
+// `sources` = [{ state, conv }] where conv converts a local value into the
+// display currency. Rows are kept per (entity × category) rather than merged, so
+// grouping the result by bank account still resolves each account separately;
+// the table only ever renders the grouped view, so duplicate category names
+// here are invisible.
+export function scopeState(sources, accountIds) {
+  const days = sources[0]?.state?.days ?? []
+  const pick = (section) =>
+    sources.flatMap(({ state, conv }) =>
+      (state[section] ?? [])
+        .filter((r) => accountIds.has(r.account?.id))
+        .map((r) => ({ ...r, values: r.values.map((v) => conv(Number(v) || 0)) }))
+    )
+  const openingBalance = sources.reduce((s, { state, conv }) => {
+    const opens = accountOpenings(state)
+    let sub = 0
+    for (const id of accountIds) sub += opens[id] ?? 0
+    return s + conv(sub)
+  }, 0)
+  return {
+    openingBalance,
+    days,
+    accounts: sources.flatMap(({ state }) => (state.accounts ?? []).filter((a) => accountIds.has(a.id))),
+    inflows: pick('inflows'),
+    outflows: pick('outflows'),
+  }
+}
+
 // ---- consolidation ---------------------------------------------------------
 // Sum several entity states into one. `entities` = [{ state, fx }] where fx
 // converts the base currency → that entity's currency (so base value =

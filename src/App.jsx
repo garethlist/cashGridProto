@@ -1,5 +1,9 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, makeInitialState, consolidate, applyShocks, shockState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
+import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
+import {
+  BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, makeEntity,
+  CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView,
+} from './views.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
 import ShocksPanel from './components/ShocksPanel.jsx'
@@ -30,80 +34,6 @@ const GRANULARITIES = [
   { key: 'month', label: 'Months' },
 ]
 
-// View tabs. Entity tabs hold their own data in their own currency; `fx` is the
-// base→local rate (GBP × fx = local), `size` gives each entity a distinct scale,
-// and `seed` a distinct cashflow pattern. SUMMARY is a live, read-only
-// consolidation of all entities, converted to the base currency (GBP).
-const BASE_CCY = 'GBP'
-const SUMMARY = { id: 'summary', label: 'GROUP', company: 'Group', currency: BASE_CCY, locale: 'en-GB', summary: true }
-// Currencies the consolidated group can be displayed in (fx = GBP → currency).
-const CCY_SYMBOL = { GBP: '£', EUR: '€', USD: '$', DKK: 'kr' }
-const GROUP_CURRENCIES = [
-  { code: 'GBP', locale: 'en-GB', fx: 1 },
-  { code: 'EUR', locale: 'de-DE', fx: 1.17 },
-  { code: 'USD', locale: 'en-US', fx: 1.27 },
-  { code: 'DKK', locale: 'da-DK', fx: 8.6 },
-]
-// Each entity has a distinct trading profile so its balance curve reads
-// differently: a steady UK retailer, a fast-growing Nordic scale-up with capex,
-// a US turnaround dipping mid-year, and a lumpy project-billing German GmbH.
-const ENTITIES = [
-  {
-    id: 'uk', label: 'UK · GBP', company: 'UK Ltd', currency: 'GBP', locale: 'en-GB', fx: 1, size: 1.0, seed: 0x1a2b3c4d,
-    accounts: [
-      { id: 'uk-op', name: 'UK Operating', number: '4021', currency: 'GBP', role: 'operating', bank: 'Barclays', pool: 'gbp-concentration' },
-      { id: 'uk-coll', name: 'UK Collections', number: '4088', currency: 'GBP', role: 'collections', bank: 'Barclays', pool: 'gbp-concentration' },
-      { id: 'uk-pay', name: 'UK Payroll', number: '4155', currency: 'GBP', role: 'payroll', bank: 'Lloyds', pool: null },
-      { id: 'uk-ap', name: 'UK Payables', number: '4192', currency: 'GBP', role: 'payables', bank: 'Barclays', pool: 'gbp-concentration' },
-    ],
-    profile: {
-      growth: 0.012, seasonAmp: 0.14, seasonPeak: 5, payrollStep: 1500,
-      bigItems: [{ target: 'loan', iso: '2026-09-01', amount: 50000 }],
-    },
-  },
-  {
-    id: 'dk', label: 'DK · DKK', company: 'Nordic A/S', currency: 'DKK', locale: 'da-DK', fx: 8.6, size: 0.55, seed: 0x51ce7a11,
-    accounts: [
-      { id: 'dk-op', name: 'Nordic Operating', number: '7310', currency: 'DKK', role: 'operating', bank: 'Danske Bank', pool: 'nordic-sweep' },
-      { id: 'dk-coll', name: 'Nordic Collections', number: '7344', currency: 'DKK', role: 'collections', bank: 'Danske Bank', pool: 'nordic-sweep' },
-      { id: 'dk-eur', name: 'Nordic EUR Trade', number: '7501', currency: 'EUR', role: 'payables', bank: 'Nordea', pool: 'eur-notional' },
-    ],
-    profile: {
-      growth: 0.045, receiptVar: 5200, seasonAmp: 0.2, seasonPeak: 9, payrollStep: 2800, marketingBase: 12000,
-      bigItems: [{ target: 'suppliers', iso: '2026-10-15', amount: 145000 }], // equipment capex
-    },
-  },
-  {
-    id: 'us', label: 'US · USD', company: 'US Inc', currency: 'USD', locale: 'en-US', fx: 1.27, size: 0.85, seed: 0x0bad1dea,
-    accounts: [
-      { id: 'us-op', name: 'US Operating', number: '2140', currency: 'USD', role: 'operating', bank: 'Citi', pool: null },
-      { id: 'us-pay', name: 'US Payroll', number: '2166', currency: 'USD', role: 'payroll', bank: 'Citi', pool: null },
-    ],
-    profile: {
-      growth: 0.006, seasonAmp: 0.24, seasonPeak: 11, marketingBase: 12000, marketingVar: 7000,
-      payrollStep: 2200, opening: 108000,
-      bigItems: [{ target: 'tax', iso: '2027-01-15', amount: 55000 }], // one-off settlement → mid-year dip
-    },
-  },
-  {
-    id: 'de', label: 'DE · EUR', company: 'GmbH', currency: 'EUR', locale: 'de-DE', fx: 1.17, size: 0.42, seed: 0x77c0ffee,
-    accounts: [
-      { id: 'de-op', name: 'GmbH Operating', number: '9004', currency: 'EUR', role: 'operating', bank: 'Deutsche Bank', pool: 'eur-notional' },
-      { id: 'de-fin', name: 'GmbH Financing', number: '9077', currency: 'EUR', role: 'financing', bank: 'Deutsche Bank', pool: 'eur-notional' },
-    ],
-    profile: {
-      receiptBase: 3800, receiptVar: 1500, growth: 0.006, seasonAmp: 0.05,
-      payrollBase: 40000, payrollStep: 800, supplierBase: 2600, marketingBase: 4000, rent: 11000,
-      bigItems: [
-        { target: 'otherInc', iso: '2026-08-20', amount: 90000 }, // project milestone
-        { target: 'otherInc', iso: '2026-12-10', amount: 125000 },
-        { target: 'otherInc', iso: '2027-04-15', amount: 110000 },
-      ],
-    },
-  },
-]
-const TABS = [SUMMARY, ...ENTITIES]
-const makeEntity = (e) => makeInitialState({ scale: e.fx * e.size, seed: e.seed, profile: e.profile, accounts: e.accounts })
 // Uniun brand palette — blue / teal / orange / purple
 const CONTRIB_COLORS = ['#0078ff', '#16bba4', '#ff9600', '#b849ff']
 
@@ -130,8 +60,11 @@ export default function App() {
   )
   const [activeTab, setActiveTab] = useState('summary')
   const [groupCurrency, setGroupCurrency] = useState(BASE_CCY) // display currency for the GROUP tab
-  const tab = TABS.find((t) => t.id === activeTab)
-  const isSummary = tab.summary
+  const view = useMemo(() => resolveView(activeTab), [activeTab])
+  const isSummary = view.kind === 'group'
+  // Bank-account and cash-pool grids are cuts through the entity data, not stores
+  // of their own — read-only, like GROUP.
+  const isScoped = view.kind === 'account' || view.kind === 'pool'
   const groupCcy = GROUP_CURRENCIES.find((c) => c.code === groupCurrency) ?? GROUP_CURRENCIES[0]
 
   // Live consolidation of every entity, expressed in the chosen group currency.
@@ -139,23 +72,47 @@ export default function App() {
     () => consolidate(ENTITIES.map((e) => ({ state: tabStates[e.id], fx: e.fx })), groupCcy.fx),
     [tabStates, groupCcy.fx]
   )
-  const state = isSummary ? consolidated : tabStates[activeTab]
 
   // Active display currency/locale (group tab can be re-denominated).
-  const displayCurrency = isSummary ? groupCcy.code : tab.currency
-  const displayLocale = isSummary ? groupCcy.locale : tab.locale
+  const displayCurrency = isSummary ? groupCcy.code : view.currency
+  const displayLocale = isSummary ? groupCcy.locale : view.locale
 
-  // SUMMARY is read-only — edits happen on entity tabs.
-  const setState = useCallback(
-    (updater) => {
-      if (activeTab === 'summary') return
-      setTabStates((all) => ({
-        ...all,
-        [activeTab]: typeof updater === 'function' ? updater(all[activeTab]) : updater,
-      }))
+  // The entities feeding this grid, each with a converter into the display
+  // currency. One source per entity, so grouping can still separate them.
+  const viewSources = useCallback(
+    (states) => {
+      const outFx = CCY_FX[displayCurrency] ?? 1
+      return view.entityIds.map((id) => {
+        const e = ENTITIES.find((x) => x.id === id)
+        return { meta: { currency: e.currency }, state: states[id], fx: e.fx, conv: (v) => (v / e.fx) * outFx }
+      })
     },
-    [activeTab]
+    [view.entityIds, displayCurrency]
   )
+
+  const state = useMemo(() => {
+    if (isSummary) return consolidated
+    if (isScoped) return scopeState(viewSources(tabStates), view.accountIds)
+    return tabStates[activeTab]
+  }, [isSummary, isScoped, consolidated, viewSources, tabStates, view.accountIds, activeTab])
+
+  // Only company grids are stores. GROUP and the account/pool cuts are derived,
+  // so they're read-only — edits happen on the company grids they draw from.
+  const readOnly = isSummary || isScoped
+  // Which grid an edit writes to, held in a ref so setState — and the edit
+  // callbacks built on it — never go stale. Capturing `activeTab` in a dependency
+  // array instead freezes those callbacks on whichever tab was open when they were
+  // created, which silently swallows every edit.
+  const editTargetRef = useRef(null)
+  editTargetRef.current = readOnly ? null : activeTab
+  const setState = useCallback((updater) => {
+    const target = editTargetRef.current
+    if (!target) return
+    setTabStates((all) => ({
+      ...all,
+      [target]: typeof updater === 'function' ? updater(all[target]) : updater,
+    }))
+  }, [])
 
   const [granularity, setGranularity] = useState('month')
 
@@ -190,6 +147,8 @@ export default function App() {
     () => (groupMulti ? groupChain : [groupSingle]),
     [groupMulti, groupChain, groupSingle]
   )
+  // Shocks can't be entered on an account/pool cut, so drop back to base mode.
+  useEffect(() => { if (isScoped) setGridMode('base') }, [isScoped])
 
   // Sliding pink underline under whichever view is active (Group vs Local grids).
   const viewtabsRef = useRef(null)
@@ -330,34 +289,45 @@ export default function App() {
   // the consolidation (see effectiveState) — they aren't in here.
   const activeResolvedShocks = useMemo(() => shocksForTab(activeTab), [shocksForTab, activeTab])
   const resolvedFocusShocks = focusKey ? activeResolvedShocks[focusKey] || [] : []
-  // Count of shocks affecting the current grid: every active shock on GROUP (all
-  // entities roll up, plus group-level), or just this entity's own otherwise.
+  // Does a shock show up in the grid being viewed? Its own shocks always do; a
+  // contributing entity's roll up, and on a scoped grid only if the category it
+  // hits actually moves through an account in scope.
+  const shockInGrid = useCallback(
+    (s) => {
+      const t = s.source?.tabId ?? activeTab
+      if (t === activeTab) return true
+      if (!view.entityIds.includes(t)) return false
+      if (!view.accountIds) return true // group / company: everything rolls up
+      const row = tabStates[t]?.[s.section]?.find((r) => r.id === s.catId)
+      return !!row && view.accountIds.has(row.account?.id)
+    },
+    [activeTab, view.entityIds, view.accountIds, tabStates]
+  )
+  // Count of shocks affecting the current grid.
   const activeShockCount = useMemo(() => {
     let n = 0
     for (const arr of Object.values(shocks)) {
-      for (const s of arr) {
-        if (s.active === false) continue
-        if (isSummary || (s.source?.tabId ?? activeTab) === activeTab) n++
-      }
+      for (const s of arr) if (s.active !== false && shockInGrid(s)) n++
     }
     return n
-  }, [shocks, isSummary, activeTab])
+  }, [shocks, shockInGrid])
   // Whether the current grid has any shocks at all (active or inactive). Used to
   // reserve the chart's marker row so its height stays constant between the
   // balance view and drilling into a category (whose row may have no shocks).
   const gridHasShocks = useMemo(() => {
     for (const arr of Object.values(shocks)) {
-      for (const s of arr) {
-        if (isSummary || (s.source?.tabId ?? activeTab) === activeTab) return true
-      }
+      for (const s of arr) if (shockInGrid(s)) return true
     }
     return false
-  }, [shocks, isSummary, activeTab])
+  }, [shocks, shockInGrid])
 
   // Add a shock to a category, spanning the clicked period (dates then editable).
   // The shock records the *source grid* it was entered on (a company/currency
   // tab or the consolidated group) so it applies and reads back only there.
   const addShock = useCallback((section, row, bucket) => {
+    // Account/pool grids are cuts, not stores: a shock entered there would have
+    // no company row to write back to, so it would break reconciliation.
+    if (isScoped) return
     const key = `${section}:${row.id}`
     const shock = {
       id: uid('sh'),
@@ -375,14 +345,14 @@ export default function App() {
       catCode: row.code,
       source: {
         tabId: activeTab,
-        company: tab.company,
+        company: view.title,
         currency: displayCurrency,
         level: isSummary ? 'group' : 'company',
       },
     }
     setShocks((cur) => ({ ...cur, [key]: [...(cur[key] || []), shock] }))
     setShocksOpen(true)
-  }, [activeTab, tab.company, displayCurrency, isSummary])
+  }, [activeTab, view.title, displayCurrency, isSummary, isScoped])
 
   const updateShock = useCallback((key, id, patch) => {
     setShocks((cur) => ({ ...cur, [key]: (cur[key] || []).map((s) => (s.id === id ? { ...s, ...patch } : s)) }))
@@ -428,8 +398,16 @@ export default function App() {
       }))
       return shockState(consolidate(shockedEntities, groupCcy.fx), activeResolvedShocks)
     }
+    // Account / pool grids: scope the *shocked* entity states, so each company's
+    // shocks flow through to whichever accounts they move over.
+    if (isScoped) {
+      const shocked = Object.fromEntries(
+        view.entityIds.map((id) => [id, shockState(tabStates[id], shocksForTab(id))])
+      )
+      return scopeState(viewSources(shocked), view.accountIds)
+    }
     return shockState(state, activeResolvedShocks)
-  }, [isSummary, tabStates, groupCcy.fx, shocksForTab, state, activeResolvedShocks])
+  }, [isSummary, isScoped, tabStates, groupCcy.fx, shocksForTab, state, activeResolvedShocks, view.entityIds, view.accountIds, viewSources])
   const daily = useMemo(() => computeDaily(effectiveState), [effectiveState])
   // Pre-shock baseline (all shocks removed) — the diverging ghost line + KPI
   // impact. On GROUP this is the raw consolidation, so the impact reflects both
@@ -441,21 +419,31 @@ export default function App() {
   // balances are unaffected.
   // On GROUP each entity is a source converted into the group currency; on an
   // entity grid there's a single source in its own currency.
-  const groupSources = useMemo(
-    () =>
-      isSummary
-        ? ENTITIES.map((e) => ({
-            meta: { currency: e.currency },
-            state: shockState(tabStates[e.id], shocksForTab(e.id)),
-            conv: (v) => (v / e.fx) * groupCcy.fx,
-          }))
-        : [{
-            meta: { currency: (ENTITIES.find((x) => x.id === activeTab) ?? {}).currency ?? displayCurrency },
-            state: effectiveState,
-            conv: (v) => v,
-          }],
-    [isSummary, tabStates, shocksForTab, groupCcy.fx, activeTab, effectiveState, displayCurrency]
-  )
+  const groupSources = useMemo(() => {
+    // GROUP and the account/pool cuts draw on several entities, so each is its own
+    // source (converted into the display currency) and grouping can separate them.
+    // A scoped source additionally drops rows outside the accounts in scope.
+    if (isSummary || isScoped) {
+      const shocked = Object.fromEntries(
+        view.entityIds.map((id) => [id, shockState(tabStates[id], shocksForTab(id))])
+      )
+      const srcs = viewSources(shocked)
+      if (!isScoped) return srcs
+      return srcs.map((s) => ({
+        ...s,
+        state: {
+          ...s.state,
+          inflows: s.state.inflows.filter((r) => view.accountIds.has(r.account?.id)),
+          outflows: s.state.outflows.filter((r) => view.accountIds.has(r.account?.id)),
+        },
+      }))
+    }
+    return [{
+      meta: { currency: (ENTITIES.find((x) => x.id === activeTab) ?? {}).currency ?? displayCurrency },
+      state: effectiveState,
+      conv: (v) => v,
+    }]
+  }, [isSummary, isScoped, tabStates, shocksForTab, view.entityIds, view.accountIds, viewSources, activeTab, effectiveState, displayCurrency])
 
   const agg = useMemo(
     () => aggregateGrouped(groupSources, groupLevels, buckets, effectiveState.openingBalance, state.days.length),
@@ -465,13 +453,15 @@ export default function App() {
   // Base mode: clicking a cell opens its underlying detail (invoices for
   // Customer Receipts / Suppliers, else the daily cash flows), built from the
   // effective (post-shock) daily values so it reconciles with the shown cell.
+  // Grouped rows carry their own post-shock daily series in the display currency
+  // (a row can span entities and accounts, so there's no single state row to look
+  // up) — read the days straight off the row.
   const openUnderlying = useCallback((section, row, bucket) => {
-    const eff = effectiveState[section]?.find((r) => r.id === row.id)
-    if (!eff) return
-    const dailyValues = bucket.dayIndices.map((i) => Number(eff.values[i]) || 0)
+    if (!row.values) return
+    const dailyValues = bucket.dayIndices.map((i) => Number(row.values[i]) || 0)
     const data = cellUnderlying(row, bucket, dailyValues, state.days)
     setUnderlying({ section, row, bucket, data })
-  }, [effectiveState, state.days])
+  }, [state.days])
   const closeUnderlying = useCallback(() => setUnderlying(null), [])
 
   // Model detail sheet, opened from the right-hand half of a category capsule.
@@ -751,6 +741,38 @@ export default function App() {
     [groupCcy]
   )
 
+  // Closing balance of every account and pool cut, each in its own currency, so
+  // the picker can show what a grid holds before you open it. Computed from the
+  // shocked entity states, exactly as the grids themselves are.
+  const scopeDetails = useMemo(() => {
+    const shocked = Object.fromEntries(
+      ENTITIES.map((e) => [e.id, shockState(tabStates[e.id], shocksForTab(e.id))])
+    )
+    const cut = (entityIds, accountIds, ccy) => {
+      const outFx = CCY_FX[ccy] ?? 1
+      const srcs = entityIds.map((id) => {
+        const e = ENTITIES.find((x) => x.id === id)
+        return { state: shocked[id], conv: (v) => (v / e.fx) * outFx }
+      })
+      const d = computeDaily(scopeState(srcs, accountIds))
+      const closing = d.dailyClosing[d.dailyClosing.length - 1] ?? 0
+      return {
+        closing,
+        closingText: closing.toLocaleString(CCY_LOCALE[ccy] ?? 'en-GB', { style: 'currency', currency: ccy, maximumFractionDigits: 0 }),
+        gbpClosing: (closing / outFx) * groupCcy.fx, // for the share-of-group figure
+      }
+    }
+    return {
+      accounts: Object.fromEntries(ALL_ACCOUNTS.map((a) => [a.id, cut([a.entityId], new Set([a.id]), a.currency)])),
+      pools: Object.fromEntries(
+        ALL_POOLS.map((p) => [
+          p.id,
+          cut([...new Set(p.accounts.map((a) => a.entityId))], new Set(p.accounts.map((a) => a.id)), p.ccy),
+        ])
+      ),
+    }
+  }, [tabStates, shocksForTab, groupCcy.fx])
+
   // --- headline metrics (from daily series) ---------------------------------
   const closingEnd = daily.dailyClosing[daily.dailyClosing.length - 1] ?? 0
   const lowest = daily.dailyClosing.length ? Math.min(...daily.dailyClosing) : 0
@@ -816,9 +838,13 @@ export default function App() {
             <span className="tabbar__div" aria-hidden />
             {/* the four local grids live behind one picker rather than four tabs */}
             <span className="viewtabs__slot" ref={entityTabRef}>
-              <EntityPicker
+              <ViewPicker
                 entities={ENTITIES}
+                accounts={ALL_ACCOUNTS}
+                pools={ALL_POOLS}
                 details={contributions}
+                scopeDetails={scopeDetails}
+                view={view}
                 activeTab={activeTab}
                 groupFmt={groupFmt}
                 groupCcyCode={groupCcy.code}
@@ -863,7 +889,7 @@ export default function App() {
           {/* The descriptive caption lives in the pill's tooltip rather than a
               subtitle line, to keep the header short. */}
           <h1>
-            <span>{tab.company}</span>
+            <span>{view.title}</span>
             {isSummary ? (
               /* the group can be re-denominated, so its currency is editable
                  in place; entity grids show their own currency as plain text */
@@ -880,6 +906,11 @@ export default function App() {
                 Σ Consolidated · read-only
               </span>
             )}
+            {isScoped && (
+              <span className="pill pill--readonly" tabIndex={0} data-tip={view.tip}>
+                {view.kind === 'pool' ? '◈' : '▤'} {view.subtitle} · read-only
+              </span>
+            )}
           </h1>
         </div>
         {/* right-aligned, so it lines up with the right edge of the last KPI card */}
@@ -892,13 +923,13 @@ export default function App() {
       <section className="contrib">
         <span className="contrib__label">
           Contributions to group closing ({groupCcy.code})
-          {!isSummary && <span className="contrib__note"> · highlighting {tab.company}</span>}
+          {!isSummary && <span className="contrib__note"> · highlighting {view.title}</span>}
         </span>
         <div className="contrib__bar">
           {contributions.map((c, i) => (
             <div
               key={c.id}
-              className={`contrib__seg ${!isSummary && c.id !== activeTab ? 'contrib__seg--dim' : ''}`}
+              className={`contrib__seg ${!isSummary && !view.entityIds.includes(c.id) ? 'contrib__seg--dim' : ''}`}
               style={{
                 width: `${groupClosing ? Math.max(0, (c.gbpClosing / groupClosing) * 100) : 0}%`,
                 background: CONTRIB_COLORS[i % CONTRIB_COLORS.length],
@@ -911,7 +942,7 @@ export default function App() {
           {contributions.map((c, i) => (
             <button
               key={c.id}
-              className={`contrib__item ${!isSummary && c.id !== activeTab ? 'contrib__item--dim' : ''} ${c.id === activeTab ? 'contrib__item--active' : ''}`}
+              className={`contrib__item ${!isSummary && !view.entityIds.includes(c.id) ? 'contrib__item--dim' : ''} ${!isSummary && view.entityIds.includes(c.id) ? 'contrib__item--active' : ''}`}
               onClick={() => setActiveTab(c.id)}
               title={`Open ${c.company}`}
             >
@@ -1042,7 +1073,7 @@ export default function App() {
           <div className="scratchbar">
             <span className="scratchbar__title">
               <span className="scratchbar__dot" />
-              {tab.company} · {focusRow ? focusRow.name : 'Cash forecast'}
+              {view.title} · {focusRow ? focusRow.name : 'Cash forecast'}
               <span className="scratchbar__tag">Scratchpad</span>
             </span>
             <button className="scratchbar__close" onClick={closeScratchpad} title="Close scratchpad (Esc)">
@@ -1111,7 +1142,8 @@ export default function App() {
               onRowName={setRowName}
               onOpeningBalance={setOpeningBalance}
               onAddRow={addRow}
-              readOnly={isSummary}
+              readOnly={readOnly}
+              canShock={!isScoped}
               gridMode={gridMode}
               focus={focus}
               focusActive={!!focusRow}
@@ -1158,7 +1190,7 @@ export default function App() {
       <UnderlyingPanel
         open={!!underlying}
         cell={underlying}
-        company={tab.company}
+        company={view.title}
         currency={displayCurrency}
         onClose={closeUnderlying}
       />
@@ -1226,13 +1258,19 @@ function Segmented({ value, onChange }) {
   )
 }
 
-// Dropdown: Base is always shown (with its own band toggle); pick at most one
-// scenario to overlay, and toggle the forecast error band per series.
-// The four local grids behind one capsule. The menu is "rich": each row carries
-// that grid's closing balance, share of the group and any shocks on it, so you
-// can pick a grid on its numbers rather than just its code.
-function EntityPicker({ entities, details, activeTab, groupFmt, groupCcyCode, groupClosing, onSelect }) {
+// Every non-group grid behind one capsule. The dimension is picked at the top of
+// the menu and drives the list beneath it: companies, their bank accounts, or the
+// cash pools those accounts sit in. Rows are "rich" — each carries the grid's
+// closing balance, share of the group and any shocks on it, so you can pick a
+// grid on its numbers rather than just its name.
+function ViewPicker({
+  entities, accounts, pools, details, scopeDetails, view, activeTab,
+  groupFmt, groupCcyCode, groupClosing, onSelect,
+}) {
   const [open, setOpen] = useState(false)
+  // The dimension being browsed. Opens on whichever one the active grid belongs
+  // to, so the menu always starts where you left off.
+  const [dim, setDim] = useState(view.dim)
   const ref = useRef(null)
   useEffect(() => {
     if (!open) return undefined
@@ -1246,50 +1284,64 @@ function EntityPicker({ entities, details, activeTab, groupFmt, groupCcyCode, gr
     }
   }, [open])
 
-  const active = entities.find((e) => e.id === activeTab)
+  const isGroup = view.kind === 'group'
+  const pick = (id) => { onSelect(id); setOpen(false) }
+  const share = (gbp) => (groupClosing ? Math.round(((gbp || 0) / groupClosing) * 100) : 0)
+  const total = entities.length + accounts.length + pools.length
+
+  // What the capsule reads when a grid is open: its name plus one short chip.
+  const chip = view.kind === 'account' ? `···${view.account.number}`
+    : view.kind === 'pool' ? view.pool.ccy
+    : view.currency
+
   const byId = Object.fromEntries(details.map((d) => [d.id, d]))
+  const head = VIEW_DIMS.find((d) => d.id === dim)?.head ?? 'Grids'
 
   return (
     <span className={`entpick ${open ? 'entpick--open' : ''}`} ref={ref}>
       <button
-        className={`entpick__btn ${active ? 'entpick__btn--on' : ''}`}
-        onClick={() => setOpen((o) => !o)}
+        className={`entpick__btn ${!isGroup ? 'entpick__btn--on' : ''}`}
+        onClick={() => { if (!open) setDim(view.dim); setOpen((o) => !o) }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={active ? `${active.company} · ${active.currency}` : 'Choose a local grid'}
+        title={isGroup ? 'Choose a company, bank account or cash pool grid' : `${view.title} · ${view.subtitle}`}
       >
-        {active
-          ? <><span className="entpick__co">{active.company}</span><span className="entpick__ccy">{active.currency}</span></>
-          : <><span className="entpick__co">Local grids</span><span className="entpick__ccy">{entities.length}</span></>}
+        {isGroup
+          ? <><span className="entpick__co">Local grids</span><span className="entpick__ccy">{total}</span></>
+          : <><span className="entpick__co">{view.title}</span><span className="entpick__ccy">{chip}</span></>}
         <svg className="entpick__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="M4 6.5 8 10.5 12 6.5" />
         </svg>
       </button>
 
       {open && (
-        <div className="entpick__menu" role="listbox">
-          <div className="entpick__head">Local grids</div>
-          {entities.map((e, i) => {
+        <div className="entpick__menu entpick__menu--dims" role="listbox">
+          {/* top-level dimension, driving the sub-selection below */}
+          <div className="seg seg--dims">
+            {VIEW_DIMS.map((d) => (
+              <button
+                key={d.id}
+                className={`seg__btn ${dim === d.id ? 'seg__btn--on' : ''}`}
+                onClick={() => setDim(d.id)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <div className="entpick__head">{head}</div>
+
+          {dim === 'company' && entities.map((e, i) => {
             const d = byId[e.id] || {}
-            const share = groupClosing ? Math.round((d.gbpClosing / groupClosing) * 100) : 0
             const on = e.id === activeTab
             return (
-              <button
-                key={e.id}
-                className={`entrow ${on ? 'entrow--on' : ''}`}
-                role="option"
-                aria-selected={on}
-                onClick={() => { onSelect(e.id); setOpen(false) }}
-              >
+              <button key={e.id} className={`entrow ${on ? 'entrow--on' : ''}`} role="option" aria-selected={on} onClick={() => pick(e.id)}>
                 <span className="entrow__dot" style={{ background: CONTRIB_COLORS[i % CONTRIB_COLORS.length] }} />
                 <span className="entrow__main">
                   <span className="entrow__co">{e.company}</span>
                   <span className="entrow__meta">
                     <span className="entrow__ccy">{e.currency}</span>
-                    <span className="entrow__share">{share}% of group</span>
-                    {d.shocks > 0 && (
-                      <span className="entrow__shocks"><ShockIcon size={10} />{d.shocks}</span>
-                    )}
+                    <span className="entrow__share">{share(d.gbpClosing)}% of group</span>
+                    {d.shocks > 0 && <span className="entrow__shocks"><ShockIcon size={10} />{d.shocks}</span>}
                   </span>
                 </span>
                 <span className="entrow__figs">
@@ -1299,6 +1351,56 @@ function EntityPicker({ entities, details, activeTab, groupFmt, groupCcyCode, gr
                   <span className="entrow__sub">
                     {d.currency === groupCcyCode ? 'closing' : `closing · ${groupFmt.format(d.gbpClosing || 0)}`}
                   </span>
+                </span>
+              </button>
+            )
+          })}
+
+          {dim === 'account' && accounts.map((a) => {
+            const id = acctTab(a.id)
+            const d = scopeDetails.accounts[a.id] || {}
+            const on = id === activeTab
+            const ei = entities.findIndex((e) => e.id === a.entityId)
+            return (
+              <button key={a.id} className={`entrow ${on ? 'entrow--on' : ''}`} role="option" aria-selected={on} onClick={() => pick(id)}>
+                <span className="entrow__dot" style={{ background: CONTRIB_COLORS[ei % CONTRIB_COLORS.length] }} />
+                <span className="entrow__main">
+                  <span className="entrow__co">{a.name}<span className="entrow__acno">···{a.number}</span></span>
+                  <span className="entrow__meta">
+                    <span className="entrow__ccy">{a.currency}</span>
+                    <span className="entrow__share">{a.bank}</span>
+                    <span className={`entrow__pool ${a.pool ? '' : 'entrow__pool--none'}`}>
+                      {a.pool ? CASH_POOLS[a.pool].name : 'Not pooled'}
+                    </span>
+                  </span>
+                </span>
+                <span className="entrow__figs">
+                  <span className="entrow__closing">{d.closingText}</span>
+                  <span className="entrow__sub">closing · {share(d.gbpClosing)}% of group</span>
+                </span>
+              </button>
+            )
+          })}
+
+          {dim === 'pool' && pools.map((p) => {
+            const id = poolTab(p.id)
+            const d = scopeDetails.pools[p.id] || {}
+            const on = id === activeTab
+            const companies = [...new Set(p.accounts.map((a) => a.company))]
+            return (
+              <button key={p.id} className={`entrow ${on ? 'entrow--on' : ''}`} role="option" aria-selected={on} onClick={() => pick(id)}>
+                <span className="entrow__dot entrow__dot--pool" />
+                <span className="entrow__main">
+                  <span className="entrow__co">{p.name}</span>
+                  <span className="entrow__meta">
+                    <span className="entrow__ccy">{p.ccy}</span>
+                    <span className="entrow__share">{p.type}</span>
+                    <span className="entrow__pool">{p.accounts.length} accounts · {companies.join(', ')}</span>
+                  </span>
+                </span>
+                <span className="entrow__figs">
+                  <span className="entrow__closing">{d.closingText}</span>
+                  <span className="entrow__sub">closing · {share(d.gbpClosing)}% of group</span>
                 </span>
               </button>
             )

@@ -19,6 +19,7 @@ export default function ForecastTable({
   onOpeningBalance,
   onAddRow,
   readOnly,
+  canShock = true,
   focus,
   focusActive,
   onFocus,
@@ -74,7 +75,8 @@ export default function ForecastTable({
         <tr>
           <th className={`grid__rowhead grid__rowhead--corner ${groupMenuOpen ? 'grid__rowhead--menuopen' : ''}`}>
             <span className="rowhead__inner">
-              <ModeSwitch value={gridMode} onChange={onGridMode} />
+              {/* account / pool grids are cuts through company data — no shocks */}
+              {canShock && <ModeSwitch value={gridMode} onChange={onGridMode} />}
               <GroupingPicker
                 multi={groupMulti}
                 onMulti={onGroupMulti}
