@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregate, makeInitialState, consolidate, applyShocks, shockState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
+import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, makeInitialState, consolidate, applyShocks, shockState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
 import ShocksPanel from './components/ShocksPanel.jsx'
@@ -162,6 +162,15 @@ export default function App() {
   const [gridMode, setGridMode] = useState('base') // 'base' (click a cell → underlying data) | 'shocks' (click a row → isolate + add shocks)
   const [showContrib, setShowContrib] = useState(false) // contributions strip is tall — off by default
   const [showScenario, setShowScenario] = useState(true) // the scenario/compare control line
+  // Row grouping under Inflow/Outflow: either one level, or a drill-down chain.
+  // Each mode keeps its own selection so switching between them is lossless.
+  const [groupMulti, setGroupMulti] = useState(false)
+  const [groupSingle, setGroupSingle] = useState('category')
+  const [groupChain, setGroupChain] = useState(['currency', 'category'])
+  const groupLevels = useMemo(
+    () => (groupMulti ? groupChain : [groupSingle]),
+    [groupMulti, groupChain, groupSingle]
+  )
 
   // Sliding pink underline under whichever view is active (Group vs Local grids).
   const viewtabsRef = useRef(null)
@@ -212,6 +221,9 @@ export default function App() {
 
   // Switching tabs closes the detail panel (the clicked cell isn't on the new grid).
   useEffect(() => { setUnderlying(null) }, [activeTab])
+
+  // Re-grouping replaces the rows, so any row-level selection no longer applies.
+  useEffect(() => { setFocus(null); setUnderlying(null) }, [groupLevels])
 
   const openScratchpad = useCallback(() => setScratchpad(true), [])
   const closeScratchpad = useCallback(() => {
@@ -405,7 +417,31 @@ export default function App() {
   // rolled-up entity shocks and group-level shocks.
   const baseDaily = useMemo(() => computeDaily(state), [state])
   const buckets = useMemo(() => bucketize(state.days, granularity), [state.days, granularity])
-  const agg = useMemo(() => aggregate(effectiveState, buckets), [effectiveState, buckets])
+  // Rows beneath the fixed Inflow/Outflow sections, grouped by one level or a
+  // drill-down chain. Only the table's aggregation swaps — the chart, KPIs and
+  // balances are unaffected.
+  // On GROUP each entity is a source converted into the group currency; on an
+  // entity grid there's a single source in its own currency.
+  const groupSources = useMemo(
+    () =>
+      isSummary
+        ? ENTITIES.map((e) => ({
+            meta: { currency: e.currency },
+            state: shockState(tabStates[e.id], shocksForTab(e.id)),
+            conv: (v) => (v / e.fx) * groupCcy.fx,
+          }))
+        : [{
+            meta: { currency: (ENTITIES.find((x) => x.id === activeTab) ?? {}).currency ?? displayCurrency },
+            state: effectiveState,
+            conv: (v) => v,
+          }],
+    [isSummary, tabStates, shocksForTab, groupCcy.fx, activeTab, effectiveState, displayCurrency]
+  )
+
+  const agg = useMemo(
+    () => aggregateGrouped(groupSources, groupLevels, buckets, effectiveState.openingBalance, state.days.length),
+    [groupSources, groupLevels, buckets, effectiveState.openingBalance, state.days.length]
+  )
 
   // Base mode: clicking a cell opens its underlying detail (invoices for
   // Customer Receipts / Suppliers, else the daily cash flows), built from the
@@ -1066,6 +1102,12 @@ export default function App() {
               onCellClick={openUnderlying}
               onOpenModel={openModel}
               onGridMode={setGridMode}
+              groupMulti={groupMulti}
+              onGroupMulti={setGroupMulti}
+              groupSingle={groupSingle}
+              onGroupSingle={setGroupSingle}
+              groupChain={groupChain}
+              onGroupChain={setGroupChain}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
               shockRanges={resolvedFocusShocks.map((s) => ({ start: s.dayStart, end: s.dayEnd }))}
             />

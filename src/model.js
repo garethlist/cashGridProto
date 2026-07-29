@@ -132,6 +132,7 @@ export function aggregate(state, buckets) {
       color: r.color,
       modelled: r.modelled,
       model: r.model,
+      synthetic: r.synthetic, // grouped rows (e.g. by currency) aren't real categories
       bucketValues: buckets.map((b) => b.dayIndices.reduce((s, i) => s + (Number(r.values[i]) || 0), 0)),
     }))
 
@@ -184,6 +185,112 @@ export function shockState(state, shocks) {
       return arr && arr.length ? { ...r, values: applyShocks(r.values, arr) } : r
     })
   return { ...state, inflows: shockRows('inflows', state.inflows), outflows: shockRows('outflows', state.outflows) }
+}
+
+// ---- row grouping (single level or a drill-down hierarchy) ------------------
+// Every (entity × category) pair is an "atom". Grouping nests atoms by one or
+// more keys, so ['currency'] gives one level and ['currency','category'] gives a
+// currency level you can drill into for its categories.
+export const GROUP_LEVELS = {
+  currency: { label: 'Currency', hint: 'One row per source currency', key: (a) => a.currency, name: (a) => a.currency, color: () => null },
+  category: { label: 'Category', hint: 'One row per forecast category', key: (a) => a.code, name: (a) => a.name, color: (a) => a.color },
+}
+
+// `sources` = [{ meta: { currency }, state, conv }] where conv converts a daily
+// value into the displayed currency. Returns the same shape as aggregate(),
+// with the rows flattened depth-first and each carrying its tree position.
+export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
+  const atomsFor = (section) =>
+    sources.flatMap(({ meta, state, conv }) =>
+      state[section].map((r) => ({
+        currency: meta.currency,
+        code: r.code,
+        name: r.name,
+        color: r.color,
+        modelled: r.modelled,
+        model: r.model,
+        values: r.values.map((v) => conv(Number(v) || 0)),
+      }))
+    )
+
+  const sumValues = (atoms) => {
+    const out = new Array(D).fill(0)
+    for (const a of atoms) for (let i = 0; i < D; i++) out[i] += a.values[i]
+    return out
+  }
+
+  // depth-first walk, emitting a flat list so the table can animate rows in and
+  // out with the same machinery it uses for the Inflow/Outflow sections
+  const walk = (atoms, lvls, depth, parentPath, out) => {
+    if (!lvls.length) return
+    const [lv, ...rest] = lvls
+    const def = GROUP_LEVELS[lv]
+    if (!def) return
+    const groups = new Map()
+    for (const a of atoms) {
+      const k = def.key(a)
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k).push(a)
+    }
+    for (const [k, kids] of groups) {
+      const path = `${parentPath}/${lv}:${k}`
+      const sample = kids[0]
+      out.push({
+        id: path,
+        path,
+        parentPath,
+        depth,
+        level: lv,
+        name: def.name(sample),
+        code: k,
+        color: def.color(sample),
+        modelled: lv === 'category' ? sample.modelled : false,
+        model: lv === 'category' ? sample.model : null,
+        // only category rows are real categories with a model behind them
+        synthetic: lv !== 'category',
+        hasChildren: rest.length > 0,
+        values: sumValues(kids),
+      })
+      walk(kids, rest, depth + 1, path, out)
+    }
+  }
+
+  const rowsFor = (section) => {
+    const atoms = atomsFor(section)
+    const out = []
+    walk(atoms, levels, 0, section, out)
+    const bucketed = out.map((r) => ({
+      ...r,
+      bucketValues: buckets.map((b) => b.dayIndices.reduce((s, i) => s + r.values[i], 0)),
+    }))
+    // totals come from the atoms, not the rows — the rows include parent levels
+    // and would otherwise double-count
+    const total = buckets.map((b) => b.dayIndices.reduce((s, i) => s + atoms.reduce((t, a) => t + a.values[i], 0), 0))
+    return { rows: bucketed, total }
+  }
+
+  const inflow = rowsFor('inflows')
+  const outflow = rowsFor('outflows')
+  const net = buckets.map((_, bi) => inflow.total[bi] - outflow.total[bi])
+
+  const opening = new Array(buckets.length)
+  const closing = new Array(buckets.length)
+  let prev = Number(openingBalance) || 0
+  for (let bi = 0; bi < buckets.length; bi++) {
+    opening[bi] = prev
+    closing[bi] = prev + net[bi]
+    prev = closing[bi]
+  }
+
+  return {
+    inflowRows: inflow.rows,
+    outflowRows: outflow.rows,
+    totalInflows: inflow.total,
+    totalOutflows: outflow.total,
+    net,
+    opening,
+    closing,
+  }
 }
 
 // ---- consolidation ---------------------------------------------------------

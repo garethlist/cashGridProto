@@ -549,6 +549,9 @@ body {
 }
 .catcap:hover { border-color: var(--border-strong); background: var(--panel); }
 .catcap__dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+/* only categories carry a colour from their definition; grouped rows (currency,
+   and later counterparty) get a neutral grey dot */
+.catcap__dot--plain { background: color-mix(in srgb, var(--muted) 55%, transparent); }
 .catcap__name {
   min-width: 0;
   font-family: var(--font-sans);
@@ -1542,6 +1545,14 @@ body {
 }
 .grid__rowhead--corner {
   z-index: 3;
+  /* the inherited overflow:hidden (for row-name ellipsis) would clip the
+     grouping menu that opens out of this cell */
+  overflow: visible;
+}
+/* While the grouping menu is open this cell must outrank the resize splitter
+   (z-index 8), or the splitter line draws across the open menu. */
+.grid__rowhead--menuopen {
+  z-index: 20;
   color: var(--muted);
   font-size: var(--fs-micro);
   text-transform: uppercase;
@@ -2086,6 +2097,172 @@ body {
 .modeswitch--shocks .modeswitch__track { background: color-mix(in srgb, var(--sc2) 22%, transparent); border-color: var(--sc2); }
 .modeswitch--shocks .modeswitch__knob { transform: translate(11px, -50%); background: var(--sc2); }
 .modeswitch__track:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* row-grouping picker, beside the mode switch in the table's corner cell */
+.grouppick { position: relative; display: inline-flex; align-items: center; flex: none; margin-left: 14px; }
+.grouppick__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 3px 8px 3px 6px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.grouppick__btn:hover,
+.grouppick--open .grouppick__btn { color: var(--ink); background: var(--panel-2); border-color: var(--border); }
+/* tinted once grouped by anything other than the default */
+.grouppick__btn--on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.grouppick__btn--on:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* level count beside the fixed "Group" label */
+.grouppick__count {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+/* collapse / expand every group at once */
+.collapseall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  margin-left: auto; /* right-aligned in the Opening balance label cell */
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 3px 8px 3px 6px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.collapseall:hover { color: var(--ink); background: var(--panel-2); border-color: var(--border); }
+
+.grouppick__menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 40;
+  width: 232px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-transform: none;
+  letter-spacing: var(--tracking-tighter);
+}
+.grouppick__head {
+  padding: 7px 10px 6px;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--muted);
+}
+.grouprow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.grouprow:hover { background: var(--panel-2); }
+.grouprow--on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.grouprow--on:hover { background: color-mix(in srgb, var(--accent) 17%, transparent); }
+.grouprow--soon { opacity: 0.5; cursor: not-allowed; }
+.grouprow--soon:hover { background: transparent; }
+.grouprow__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.grouprow__label { font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--ink); }
+.grouprow__hint { font-size: var(--fs-micro); color: var(--muted); }
+.grouprow__tick { flex: none; color: var(--accent); font-weight: var(--fw-semibold); }
+
+/* single / drill-down mode switch at the top of the menu */
+.grouppick__modes { display: flex; padding: 4px 6px 2px; }
+.grouppick__modes .seg { width: 100%; }
+.grouppick__modes .seg__btn { flex: 1; justify-content: center; padding: 0 8px; }
+
+/* drill-down rows: a level badge, the option, and reorder arrows */
+.grouprow--single { cursor: pointer; }
+.grouprow__pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.grouprow__pick:disabled { cursor: not-allowed; }
+.grouprow__level {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  background: var(--accent);
+  color: #fff;
+}
+.grouprow__level--off { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.grouprow__moves { display: inline-flex; flex-direction: column; gap: 1px; flex: none; }
+.grouprow__move {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 11px;
+  padding: 1px 3px;
+  border-radius: var(--r-xs);
+}
+.grouprow__move:hover:not(:disabled) { color: var(--ink); background: var(--panel); }
+.grouprow__move:disabled { opacity: 0.3; cursor: not-allowed; }
+.grouppick__summary {
+  margin: 3px 4px 1px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--muted-strong);
+}
 
 /* ---- underlying detail drawer (Base mode) -------------------------------- */
 .underpanel {
