@@ -194,6 +194,27 @@ export function shockState(state, shocks) {
 export const GROUP_LEVELS = {
   currency: { label: 'Currency', hint: 'One row per source currency', key: (a) => a.currency, name: (a) => a.currency, color: () => null },
   category: { label: 'Category', hint: 'One row per forecast category', key: (a) => a.code, name: (a) => a.name, color: (a) => a.color },
+  bankAccount: {
+    label: 'Bank account',
+    hint: 'One row per bank account',
+    key: (a) => a.account?.id ?? 'unassigned',
+    name: (a) => (a.account ? `${a.account.name} ···${a.account.number}` : 'Unassigned'),
+    color: () => null,
+  },
+  cashPool: {
+    label: 'Cash pool',
+    hint: 'Accounts grouped into their pool',
+    key: (a) => a.account?.pool ?? 'unpooled',
+    name: (a) => CASH_POOLS[a.account?.pool]?.name ?? 'Not pooled',
+    color: () => null,
+  },
+}
+
+// Cash pools group bank accounts across (or within) entities.
+export const CASH_POOLS = {
+  'gbp-concentration': { id: 'gbp-concentration', name: 'UK Concentration', type: 'Physical sweep', ccy: 'GBP' },
+  'eur-notional': { id: 'eur-notional', name: 'EUR Notional Pool', type: 'Notional', ccy: 'EUR' },
+  'nordic-sweep': { id: 'nordic-sweep', name: 'Nordic Sweep', type: 'Physical sweep', ccy: 'DKK' },
 }
 
 // `sources` = [{ meta: { currency }, state, conv }] where conv converts a daily
@@ -209,6 +230,7 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
         color: r.color,
         modelled: r.modelled,
         model: r.model,
+        account: r.account,
         values: r.values.map((v) => conv(Number(v) || 0)),
       }))
     )
@@ -637,22 +659,31 @@ export function makeInitialState(opts = {}) {
 
   const sc = (arr) => (scale === 1 ? arr : arr.map((v) => Math.round(v * scale)))
 
+  // Which bank account services each category. Accounts are declared per entity
+  // with a role; a category resolves to the account holding that role, falling
+  // back to the entity's primary account when it doesn't have one.
+  const accounts = opts.accounts ?? []
+  const primary = accounts[0] ?? null
+  const acct = (role) => accounts.find((a) => a.role === role) ?? primary
+
   return {
     openingBalance: Math.round(openingBase * scale),
     days,
+    accounts,
     // Each category carries: a swatch colour, whether it is modelled (⚡) or
-    // entered manually (👤), and — when modelled — the model that forecasts it.
+    // entered manually (👤), the model that forecasts it, and the bank account
+    // its cash moves through.
     inflows: [
-      { id: uid('r'), name: 'Customer Receipts', code: 'ARE', color: '#00c089', values: sc(receipts), modelled: true, model: { name: 'SARIMA', category: 'Statistical' } },
-      { id: uid('r'), name: 'Loan Drawdown', code: 'ARI', color: '#0078ff', values: sc(loan), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
-      { id: uid('r'), name: 'Other Income', code: 'AREX', color: '#16bba4', values: sc(otherInc), modelled: true, model: { name: 'Holt-Winters', category: 'Statistical' } },
+      { id: uid('r'), name: 'Customer Receipts', code: 'ARE', color: '#00c089', values: sc(receipts), modelled: true, model: { name: 'SARIMA', category: 'Statistical' }, account: acct('collections') },
+      { id: uid('r'), name: 'Loan Drawdown', code: 'ARI', color: '#0078ff', values: sc(loan), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' }, account: acct('financing') },
+      { id: uid('r'), name: 'Other Income', code: 'AREX', color: '#16bba4', values: sc(otherInc), modelled: true, model: { name: 'Holt-Winters', category: 'Statistical' }, account: acct('operating') },
     ],
     outflows: [
-      { id: uid('r'), name: 'Payroll', code: 'SALARIES', color: '#ff9600', values: sc(payroll), modelled: true, model: { name: 'Componentised Payroll Model', category: 'Custom R&D' } },
-      { id: uid('r'), name: 'Rent & Facilities', code: 'PAIT', color: '#b849ff', values: sc(rent), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' } },
-      { id: uid('r'), name: 'Suppliers', code: 'APE', color: '#de4383', values: sc(suppliers), modelled: true, model: { name: 'XGBoost', category: 'ML/AI' } },
-      { id: uid('r'), name: 'Marketing', code: 'APIX', color: '#ffd621', values: sc(marketing), modelled: true, model: { name: 'Chronos', category: 'ML/AI' } },
-      { id: uid('r'), name: 'Tax & VAT', code: 'TAX', color: '#858585', values: sc(tax), modelled: false, model: null },
+      { id: uid('r'), name: 'Payroll', code: 'SALARIES', color: '#ff9600', values: sc(payroll), modelled: true, model: { name: 'Componentised Payroll Model', category: 'Custom R&D' }, account: acct('payroll') },
+      { id: uid('r'), name: 'Rent & Facilities', code: 'PAIT', color: '#b849ff', values: sc(rent), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' }, account: acct('operating') },
+      { id: uid('r'), name: 'Suppliers', code: 'APE', color: '#de4383', values: sc(suppliers), modelled: true, model: { name: 'XGBoost', category: 'ML/AI' }, account: acct('payables') },
+      { id: uid('r'), name: 'Marketing', code: 'APIX', color: '#ffd621', values: sc(marketing), modelled: true, model: { name: 'Chronos', category: 'ML/AI' }, account: acct('payables') },
+      { id: uid('r'), name: 'Tax & VAT', code: 'TAX', color: '#858585', values: sc(tax), modelled: false, model: null, account: acct('operating') },
     ],
   }
 }

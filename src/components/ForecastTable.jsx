@@ -243,6 +243,8 @@ export default function ForecastTable({
 const GROUPINGS = [
   { id: 'category', label: 'Category', hint: 'One row per forecast category' },
   { id: 'currency', label: 'Currency', hint: 'One row per source currency' },
+  { id: 'bankAccount', label: 'Bank account', hint: 'One row per bank account' },
+  { id: 'cashPool', label: 'Cash pool', hint: 'Accounts grouped into their pool' },
   { id: 'counterparty', label: 'Counterparty', hint: 'Coming soon', soon: true },
 ]
 

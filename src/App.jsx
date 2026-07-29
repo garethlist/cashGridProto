@@ -50,6 +50,12 @@ const GROUP_CURRENCIES = [
 const ENTITIES = [
   {
     id: 'uk', label: 'UK · GBP', company: 'UK Ltd', currency: 'GBP', locale: 'en-GB', fx: 1, size: 1.0, seed: 0x1a2b3c4d,
+    accounts: [
+      { id: 'uk-op', name: 'UK Operating', number: '4021', currency: 'GBP', role: 'operating', bank: 'Barclays', pool: 'gbp-concentration' },
+      { id: 'uk-coll', name: 'UK Collections', number: '4088', currency: 'GBP', role: 'collections', bank: 'Barclays', pool: 'gbp-concentration' },
+      { id: 'uk-pay', name: 'UK Payroll', number: '4155', currency: 'GBP', role: 'payroll', bank: 'Lloyds', pool: null },
+      { id: 'uk-ap', name: 'UK Payables', number: '4192', currency: 'GBP', role: 'payables', bank: 'Barclays', pool: 'gbp-concentration' },
+    ],
     profile: {
       growth: 0.012, seasonAmp: 0.14, seasonPeak: 5, payrollStep: 1500,
       bigItems: [{ target: 'loan', iso: '2026-09-01', amount: 50000 }],
@@ -57,6 +63,11 @@ const ENTITIES = [
   },
   {
     id: 'dk', label: 'DK · DKK', company: 'Nordic A/S', currency: 'DKK', locale: 'da-DK', fx: 8.6, size: 0.55, seed: 0x51ce7a11,
+    accounts: [
+      { id: 'dk-op', name: 'Nordic Operating', number: '7310', currency: 'DKK', role: 'operating', bank: 'Danske Bank', pool: 'nordic-sweep' },
+      { id: 'dk-coll', name: 'Nordic Collections', number: '7344', currency: 'DKK', role: 'collections', bank: 'Danske Bank', pool: 'nordic-sweep' },
+      { id: 'dk-eur', name: 'Nordic EUR Trade', number: '7501', currency: 'EUR', role: 'payables', bank: 'Nordea', pool: 'eur-notional' },
+    ],
     profile: {
       growth: 0.045, receiptVar: 5200, seasonAmp: 0.2, seasonPeak: 9, payrollStep: 2800, marketingBase: 12000,
       bigItems: [{ target: 'suppliers', iso: '2026-10-15', amount: 145000 }], // equipment capex
@@ -64,6 +75,10 @@ const ENTITIES = [
   },
   {
     id: 'us', label: 'US · USD', company: 'US Inc', currency: 'USD', locale: 'en-US', fx: 1.27, size: 0.85, seed: 0x0bad1dea,
+    accounts: [
+      { id: 'us-op', name: 'US Operating', number: '2140', currency: 'USD', role: 'operating', bank: 'Citi', pool: null },
+      { id: 'us-pay', name: 'US Payroll', number: '2166', currency: 'USD', role: 'payroll', bank: 'Citi', pool: null },
+    ],
     profile: {
       growth: 0.006, seasonAmp: 0.24, seasonPeak: 11, marketingBase: 12000, marketingVar: 7000,
       payrollStep: 2200, opening: 108000,
@@ -72,6 +87,10 @@ const ENTITIES = [
   },
   {
     id: 'de', label: 'DE · EUR', company: 'GmbH', currency: 'EUR', locale: 'de-DE', fx: 1.17, size: 0.42, seed: 0x77c0ffee,
+    accounts: [
+      { id: 'de-op', name: 'GmbH Operating', number: '9004', currency: 'EUR', role: 'operating', bank: 'Deutsche Bank', pool: 'eur-notional' },
+      { id: 'de-fin', name: 'GmbH Financing', number: '9077', currency: 'EUR', role: 'financing', bank: 'Deutsche Bank', pool: 'eur-notional' },
+    ],
     profile: {
       receiptBase: 3800, receiptVar: 1500, growth: 0.006, seasonAmp: 0.05,
       payrollBase: 40000, payrollStep: 800, supplierBase: 2600, marketingBase: 4000, rent: 11000,
@@ -84,7 +103,7 @@ const ENTITIES = [
   },
 ]
 const TABS = [SUMMARY, ...ENTITIES]
-const makeEntity = (e) => makeInitialState({ scale: e.fx * e.size, seed: e.seed, profile: e.profile })
+const makeEntity = (e) => makeInitialState({ scale: e.fx * e.size, seed: e.seed, profile: e.profile, accounts: e.accounts })
 // Uniun brand palette — blue / teal / orange / purple
 const CONTRIB_COLORS = ['#0078ff', '#16bba4', '#ff9600', '#b849ff']
 
@@ -781,7 +800,6 @@ export default function App() {
     <div className={`app ${underlying ? 'app--docked' : ''}`}>
       {/* view tabs — company / currency grid combinations */}
       <div className="tabbar">
-        <span className="tabbar__brand">Cash Forecast</span>
         <div className="tabbar__tabs">
           {/* Group vs Local grids, with one pink underline that slides between
               them to mark which view is active. */}
