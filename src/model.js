@@ -217,6 +217,26 @@ export const CASH_POOLS = {
   'nordic-sweep': { id: 'nordic-sweep', name: 'Nordic Sweep', type: 'Physical sweep', ccy: 'DKK' },
 }
 
+// The distinct keys each grouping level would produce for a set of sources. A
+// level that yields one key adds nothing to the grid it's viewed on — grouping a
+// single-account grid by bank account just relabels the same rows — so the
+// picker uses this to retire options that the current scope has made redundant.
+export function levelKeys(sources) {
+  const out = {}
+  for (const [lv, def] of Object.entries(GROUP_LEVELS)) {
+    const keys = new Set()
+    for (const { meta, state } of sources) {
+      for (const section of ['inflows', 'outflows']) {
+        for (const r of state[section] ?? []) {
+          keys.add(def.key({ currency: meta.currency, code: r.code, account: r.account }))
+        }
+      }
+    }
+    out[lv] = keys
+  }
+  return out
+}
+
 // `sources` = [{ meta: { currency }, state, conv }] where conv converts a daily
 // value into the displayed currency. Returns the same shape as aggregate(),
 // with the rows flattened depth-first and each carrying its tree position.

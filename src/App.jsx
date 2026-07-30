@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
+import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, makeEntity,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView,
@@ -143,7 +143,11 @@ export default function App() {
   const [groupMulti, setGroupMulti] = useState(false)
   const [groupSingle, setGroupSingle] = useState('category')
   const [groupChain, setGroupChain] = useState(['currency', 'category'])
-  const groupLevels = useMemo(
+  // What you've *chosen*. What actually gets applied is this minus any level the
+  // current grid has made redundant — see groupLevels below. The choice itself is
+  // never rewritten, so it comes back intact when you return to a grid that can
+  // use it.
+  const groupSelection = useMemo(
     () => (groupMulti ? groupChain : [groupSingle]),
     [groupMulti, groupChain, groupSingle]
   )
@@ -197,11 +201,12 @@ export default function App() {
     if (gridMode !== 'base') setUnderlying(null)
   }, [gridMode])
 
-  // Switching tabs closes the detail panel (the clicked cell isn't on the new grid).
-  useEffect(() => { setUnderlying(null) }, [activeTab])
+  // Switching grids drops any row-level selection — neither the clicked cell nor
+  // the isolated row is necessarily on the grid you've moved to.
+  useEffect(() => { setFocus(null); setUnderlying(null) }, [activeTab])
 
   // Re-grouping replaces the rows, so any row-level selection no longer applies.
-  useEffect(() => { setFocus(null); setUnderlying(null) }, [groupLevels])
+  useEffect(() => { setFocus(null); setUnderlying(null) }, [groupSelection])
 
   const openScratchpad = useCallback(() => setScratchpad(true), [])
   const closeScratchpad = useCallback(() => {
@@ -444,6 +449,31 @@ export default function App() {
       conv: (v) => v,
     }]
   }, [isSummary, isScoped, tabStates, shocksForTab, view.entityIds, view.accountIds, viewSources, activeTab, effectiveState, displayCurrency])
+
+  // The grid selector narrows what's worth grouping by: on a single-account grid
+  // "Bank account" can only ever draw one row, and on a pool grid so can "Cash
+  // pool". Any level the current scope has collapsed to one key is retired from
+  // the picker, with the reason shown in its place. Category always stays — it's
+  // the fallback when everything else drops out.
+  const groupDisabled = useMemo(() => {
+    const keys = levelKeys(groupSources)
+    const out = {}
+    const n = (lv) => keys[lv]?.size ?? 0
+    if (n('currency') <= 1) out.currency = `All rows are ${[...(keys.currency ?? [])][0] ?? 'one currency'}`
+    if (n('bankAccount') <= 1) out.bankAccount = 'This grid is one account'
+    if (n('cashPool') <= 1) {
+      const only = [...(keys.cashPool ?? [])][0]
+      out.cashPool = only === 'unpooled' ? 'No accounts here are pooled' : 'This grid is one pool'
+    }
+    return out
+  }, [groupSources])
+
+  // The levels actually applied: your selection with the retired ones dropped,
+  // falling back to Category if that empties it out.
+  const groupLevels = useMemo(() => {
+    const kept = groupSelection.filter((lv) => !groupDisabled[lv])
+    return kept.length ? kept : ['category']
+  }, [groupSelection, groupDisabled])
 
   const agg = useMemo(
     () => aggregateGrouped(groupSources, groupLevels, buckets, effectiveState.openingBalance, state.days.length),
@@ -1158,6 +1188,7 @@ export default function App() {
               onGroupSingle={setGroupSingle}
               groupChain={groupChain}
               onGroupChain={setGroupChain}
+              groupDisabled={groupDisabled}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
               shockRanges={resolvedFocusShocks.map((s) => ({ start: s.dayStart, end: s.dayEnd }))}
             />

@@ -33,6 +33,7 @@ export default function ForecastTable({
   onGroupSingle,
   groupChain,
   onGroupChain,
+  groupDisabled,
   underlyingCell,
   gridMode = 'base',
   shockRanges = [],
@@ -84,6 +85,7 @@ export default function ForecastTable({
                 onSingle={onGroupSingle}
                 chain={groupChain}
                 onChain={onGroupChain}
+                disabled={groupDisabled}
                 onOpenChange={setGroupMenuOpen}
               />
             </span>
@@ -250,7 +252,7 @@ const GROUPINGS = [
   { id: 'counterparty', label: 'Counterparty', hint: 'Coming soon', soon: true },
 ]
 
-function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, onOpenChange }) {
+function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disabled = {}, onOpenChange }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { onOpenChange?.(open) }, [open, onOpenChange])
   const ref = useRef(null)
@@ -267,22 +269,36 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, onOp
   }, [open])
 
   const labelOf = (id) => GROUPINGS.find((g) => g.id === id)?.label ?? id
-  const active = multi ? chain : [single]
-  const summary = active.map(labelOf).join(' → ')
+  // A grouping is off either because it isn't built yet, or because the grid
+  // you're on has collapsed it to a single row. Both read the same in the menu,
+  // with the reason standing in for the hint.
+  const offReason = (g) => (g.soon ? g.hint : disabled[g.id] ?? null)
+  // Your selection survives navigation, but a retired level isn't applied — so
+  // the level numbers, the count badge and the summary all track the levels that
+  // actually run, not the ones merely chosen.
+  const live = chain.filter((id) => !disabled[id])
+  const applied = multi ? (live.length ? live : ['category']) : [disabled[single] ? 'category' : single]
+  const summary = applied.map(labelOf).join(' → ')
 
   // In multi mode a grouping can be added to / removed from the chain; the last
-  // remaining level can't be removed or there'd be nothing to group by.
+  // level that's actually running can't be removed or there'd be nothing to
+  // group by.
   const toggleInChain = (id) => {
     if (chain.includes(id)) {
-      if (chain.length > 1) onChain(chain.filter((x) => x !== id))
+      if (live.length > 1 || !live.includes(id)) onChain(chain.filter((x) => x !== id))
     } else {
       onChain([...chain, id])
     }
   }
+  // Reorder against the levels that are actually applied, skipping over any
+  // retired ones sitting dormant in the chain — otherwise a swap with a dormant
+  // neighbour would look like the button did nothing.
   const move = (id, dir) => {
+    const li = live.indexOf(id)
+    const lj = li + dir
+    if (li < 0 || lj < 0 || lj >= live.length) return
     const i = chain.indexOf(id)
-    const j = i + dir
-    if (i < 0 || j < 0 || j >= chain.length) return
+    const j = chain.indexOf(live[lj])
     const next = [...chain]
     ;[next[i], next[j]] = [next[j], next[i]]
     onChain(next)
@@ -291,7 +307,7 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, onOp
   return (
     <span className={`grouppick ${open ? 'grouppick--open' : ''}`} ref={ref}>
       <button
-        className={`grouppick__btn ${multi || single !== 'category' ? 'grouppick__btn--on' : ''}`}
+        className={`grouppick__btn ${applied.length > 1 || applied[0] !== 'category' ? 'grouppick__btn--on' : ''}`}
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -304,7 +320,7 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, onOp
         {/* fixed label — the corner cell is tight, and the chain can get long.
             The chain itself is in the tooltip and spelled out in the menu. */}
         <span className="grouppick__label">Group</span>
-        {multi && <span className="grouppick__count">{chain.length}</span>}
+        {multi && applied.length > 1 && <span className="grouppick__count">{applied.length}</span>}
       </button>
 
       {open && (
@@ -322,48 +338,55 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, onOp
             ? [...chain, ...GROUPINGS.map((g) => g.id).filter((id) => !chain.includes(id))].map((id, idx) => {
                 const g = GROUPINGS.find((x) => x.id === id)
                 if (!g) return null
-                const inChain = chain.includes(id)
-                const pos = chain.indexOf(id)
+                const off = offReason(g)
+                // A retired level can still be in the chain — it just isn't
+                // running, so it shows no level number and no reorder arrows.
+                const inChain = chain.includes(id) && !off
+                const pos = live.indexOf(id)
                 return (
-                  <span key={id} className={`grouprow ${inChain ? 'grouprow--on' : ''} ${g.soon ? 'grouprow--soon' : ''}`}>
+                  <span key={id} className={`grouprow ${inChain ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''}`}>
                     <button
                       className="grouprow__pick"
-                      disabled={g.soon}
+                      disabled={!!off}
                       aria-pressed={inChain}
-                      onClick={() => { if (!g.soon) toggleInChain(id) }}
-                      title={inChain ? `Remove ${g.label} from the drill-down` : `Add ${g.label} to the drill-down`}
+                      onClick={() => { if (!off) toggleInChain(id) }}
+                      title={off || (inChain ? `Remove ${g.label} from the drill-down` : `Add ${g.label} to the drill-down`)}
                     >
                       <span className={`grouprow__level ${inChain ? '' : 'grouprow__level--off'}`}>{inChain ? pos + 1 : '—'}</span>
                       <span className="grouprow__main">
                         <span className="grouprow__label">{g.label}</span>
-                        <span className="grouprow__hint">{g.hint}</span>
+                        <span className="grouprow__hint">{off || g.hint}</span>
                       </span>
                     </button>
-                    {inChain && chain.length > 1 && (
+                    {inChain && live.length > 1 && (
                       <span className="grouprow__moves">
                         <button className="grouprow__move" disabled={pos === 0} onClick={() => move(id, -1)} title="Move up a level" aria-label={`Move ${g.label} up`}>↑</button>
-                        <button className="grouprow__move" disabled={pos === chain.length - 1} onClick={() => move(id, 1)} title="Move down a level" aria-label={`Move ${g.label} down`}>↓</button>
+                        <button className="grouprow__move" disabled={pos === live.length - 1} onClick={() => move(id, 1)} title="Move down a level" aria-label={`Move ${g.label} down`}>↓</button>
                       </span>
                     )}
                   </span>
                 )
               })
-            : GROUPINGS.map((g) => (
-                <button
-                  key={g.id}
-                  className={`grouprow grouprow--single ${g.id === single ? 'grouprow--on' : ''} ${g.soon ? 'grouprow--soon' : ''}`}
-                  role="option"
-                  aria-selected={g.id === single}
-                  disabled={g.soon}
-                  onClick={() => { if (!g.soon) { onSingle(g.id); setOpen(false) } }}
-                >
-                  <span className="grouprow__main">
-                    <span className="grouprow__label">{g.label}</span>
-                    <span className="grouprow__hint">{g.hint}</span>
-                  </span>
-                  {g.id === single && <span className="grouprow__tick" aria-hidden>✓</span>}
-                </button>
-              ))}
+            : GROUPINGS.map((g) => {
+                const off = offReason(g)
+                return (
+                  <button
+                    key={g.id}
+                    className={`grouprow grouprow--single ${g.id === single ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''}`}
+                    role="option"
+                    aria-selected={g.id === single}
+                    disabled={!!off}
+                    title={off || undefined}
+                    onClick={() => { if (!off) { onSingle(g.id); setOpen(false) } }}
+                  >
+                    <span className="grouprow__main">
+                      <span className="grouprow__label">{g.label}</span>
+                      <span className="grouprow__hint">{off || g.hint}</span>
+                    </span>
+                    {g.id === single && <span className="grouprow__tick" aria-hidden>✓</span>}
+                  </button>
+                )
+              })}
 
           {multi && <span className="grouppick__summary">{summary}</span>}
         </span>

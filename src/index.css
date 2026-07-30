@@ -2237,6 +2237,8 @@ body {
 
 /* drill-down rows: a level badge, the option, and reorder arrows */
 .grouprow--single { cursor: pointer; }
+/* after --single, or it would win on specificity and re-assert the pointer */
+.grouprow--single.grouprow--soon { cursor: not-allowed; }
 .grouprow__pick {
   display: flex;
   align-items: center;
