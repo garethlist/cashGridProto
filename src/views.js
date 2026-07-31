@@ -2,7 +2,7 @@
 // top of it, and the resolver that turns a tab id into a renderable view.
 //
 // Kept out of App.jsx so the data model can be exercised without a browser.
-import { CASH_POOLS, makeInitialState } from './model.js'
+import { CASH_POOLS, makeInitialState, uid } from './model.js'
 
 // View tabs. Entity tabs hold their own data in their own currency; `fx` is the
 // base→local rate (GBP × fx = local), `size` gives each entity a distinct scale,
@@ -29,6 +29,9 @@ export const ENTITIES = [
       { id: 'uk-coll', name: 'UK Collections', number: '4088', currency: 'GBP', role: 'collections', bank: 'Barclays', pool: 'gbp-concentration', openShare: 2 },
       { id: 'uk-pay', name: 'UK Payroll', number: '4155', currency: 'GBP', role: 'payroll', bank: 'Lloyds', pool: null, openShare: 1 },
       { id: 'uk-ap', name: 'UK Payables', number: '4192', currency: 'GBP', role: 'payables', bank: 'Barclays', pool: 'gbp-concentration', openShare: 2 },
+      // EUR header for the cross-border sweep pool — starts empty and fills as the
+      // European entities concentrate their EUR into it each day.
+      { id: 'uk-eur', name: 'UK EUR Header', number: '4210', currency: 'EUR', role: 'eursweep', bank: 'Barclays', pool: 'eur-sweep', openShare: 0 },
     ],
     profile: {
       growth: 0.012, seasonAmp: 0.14, seasonPeak: 5, payrollStep: 1500,
@@ -38,9 +41,11 @@ export const ENTITIES = [
   {
     id: 'dk', label: 'DK · DKK', company: 'Nordic A/S', currency: 'DKK', locale: 'da-DK', fx: 8.6, size: 0.55, seed: 0x51ce7a11,
     accounts: [
-      { id: 'dk-op', name: 'Nordic Operating', number: '7310', currency: 'DKK', role: 'operating', bank: 'Danske Bank', pool: 'nordic-sweep', openShare: 6 },
-      { id: 'dk-coll', name: 'Nordic Collections', number: '7344', currency: 'DKK', role: 'collections', bank: 'Danske Bank', pool: 'nordic-sweep', openShare: 3 },
-      { id: 'dk-eur', name: 'Nordic EUR Trade', number: '7501', currency: 'EUR', role: 'payables', bank: 'Nordea', pool: 'eur-notional', openShare: 2 },
+      // Nordic operating + collections feed the group EUR sweep (they used to form
+      // the local Nordic sweep, now superseded by concentration into the UK header).
+      { id: 'dk-op', name: 'Nordic Operating', number: '7310', currency: 'DKK', role: 'operating', bank: 'Danske Bank', pool: 'eur-sweep', openShare: 6 },
+      { id: 'dk-coll', name: 'Nordic Collections', number: '7344', currency: 'DKK', role: 'collections', bank: 'Danske Bank', pool: 'eur-sweep', openShare: 3 },
+      { id: 'dk-eur', name: 'Nordic EUR Trade', number: '7501', currency: 'EUR', role: 'payables', bank: 'Nordea', pool: 'eur-sweep', openShare: 2 },
     ],
     profile: {
       growth: 0.045, receiptVar: 5200, seasonAmp: 0.2, seasonPeak: 9, payrollStep: 2800, marketingBase: 12000,
@@ -62,8 +67,9 @@ export const ENTITIES = [
   {
     id: 'de', label: 'DE · EUR', company: 'GmbH', currency: 'EUR', locale: 'de-DE', fx: 1.17, size: 0.42, seed: 0x77c0ffee,
     accounts: [
-      { id: 'de-op', name: 'GmbH Operating', number: '9004', currency: 'EUR', role: 'operating', bank: 'Deutsche Bank', pool: 'eur-notional', openShare: 4 },
-      { id: 'de-fin', name: 'GmbH Financing', number: '9077', currency: 'EUR', role: 'financing', bank: 'Deutsche Bank', pool: 'eur-notional', openShare: 1 },
+      // GmbH's operating account feeds the group EUR sweep; financing sits outside it.
+      { id: 'de-op', name: 'GmbH Operating', number: '9004', currency: 'EUR', role: 'operating', bank: 'Deutsche Bank', pool: 'eur-sweep', openShare: 4 },
+      { id: 'de-fin', name: 'GmbH Financing', number: '9077', currency: 'EUR', role: 'financing', bank: 'Deutsche Bank', pool: null, openShare: 1 },
     ],
     profile: {
       receiptBase: 3800, receiptVar: 1500, growth: 0.006, seasonAmp: 0.05,
@@ -77,6 +83,62 @@ export const ENTITIES = [
   },
 ]
 export const makeEntity = (e) => makeInitialState({ scale: e.fx * e.size, seed: e.seed, profile: e.profile, accounts: e.accounts })
+
+// ---- EUR sweep pool ---------------------------------------------------------
+// A cross-border physical (zero-balancing) sweep. Each European participant's
+// pooled accounts carry the categories already modelled for them (receipts,
+// payroll, suppliers, …); each business day their net movement is swept to a EUR
+// header account held by the UK, so the participant account zero-balances to its
+// opening buffer and the UK header concentrates the cash.
+//
+// The sweep is a derived residual, not a forecast — so it's never a modelled
+// category. And because each participant's sweep-out equals the UK's sweep-in in
+// the base currency, the Sweep nets to zero across the group: it relocates
+// modelled cash into the header without changing the consolidated total.
+export const EUR_SWEEP = { pool: 'eur-sweep', header: 'uk' }
+
+const SWEEP = { name: 'EUR Sweep', code: 'SWEEP', color: '#06b6d4', modelled: false, model: null }
+
+function applyEurSweep(states) {
+  const { pool, header } = EUR_SWEEP
+  const D = states[header].days.length
+  const headerBase = new Array(D).fill(0) // concentration received, in the base currency
+
+  // Daily net movement of one account, from the categories already sitting on it.
+  const accountNet = (st, acctId) => {
+    const net = new Array(D).fill(0)
+    for (const r of st.inflows) if (r.account?.id === acctId) for (let i = 0; i < D; i++) net[i] += Number(r.values[i]) || 0
+    for (const r of st.outflows) if (r.account?.id === acctId) for (let i = 0; i < D; i++) net[i] -= Number(r.values[i]) || 0
+    return net
+  }
+
+  for (const e of ENTITIES) {
+    if (e.id === header) continue
+    const accts = e.accounts.filter((a) => a.pool === pool)
+    if (!accts.length) continue
+    const st = states[e.id]
+    for (const acct of accts) {
+      const net = accountNet(st, acct.id) // computed before this account's own sweep is added
+      // sweep the net out each day → the account's movement becomes zero, leaving
+      // its opening balance as the floor
+      st.outflows = [...st.outflows, { id: uid('r'), ...SWEEP, values: net, account: acct }]
+      for (let i = 0; i < D; i++) headerBase[i] += net[i] / e.fx
+    }
+  }
+
+  // Header leg, in the header entity's own currency.
+  const uk = states[header]
+  const hAcct = uk.accounts.find((a) => a.pool === pool)
+  const hfx = ENTITIES.find((e) => e.id === header).fx
+  uk.inflows = [...uk.inflows, { id: uid('r'), ...SWEEP, values: headerBase.map((v) => v * hfx), account: hAcct }]
+  return states
+}
+
+// Build every entity's dataset, then overlay the EUR sweep so the pool's legs are
+// present and reconcile. This is the app's source of truth for entity data.
+export function buildEntityStates() {
+  return applyEurSweep(Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)])))
+}
 
 // ---- grid views -------------------------------------------------------------
 // A grid can be scoped four ways: the consolidated group, one company, one bank

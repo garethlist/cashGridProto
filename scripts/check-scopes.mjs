@@ -5,9 +5,9 @@
 // whole: sum of all account grids == GROUP, and each pool == the accounts in it.
 // Run with: node scripts/check-scopes.mjs
 import { computeDaily, consolidate, scopeState, accountOpenings } from '../src/model.js'
-import { ENTITIES, makeEntity, ALL_ACCOUNTS, ALL_POOLS, CCY_FX } from '../src/views.js'
+import { ENTITIES, buildEntityStates, ALL_ACCOUNTS, ALL_POOLS, CCY_FX } from '../src/views.js'
 
-const states = Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)]))
+const states = buildEntityStates()
 const fxOf = (id) => ENTITIES.find((e) => e.id === id).fx
 
 // Closing balance of a cut, converted back to GBP so everything is comparable.

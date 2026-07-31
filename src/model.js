@@ -215,6 +215,9 @@ export const CASH_POOLS = {
   'gbp-concentration': { id: 'gbp-concentration', name: 'UK Concentration', type: 'Physical sweep', ccy: 'GBP' },
   'eur-notional': { id: 'eur-notional', name: 'EUR Notional Pool', type: 'Notional', ccy: 'EUR' },
   'nordic-sweep': { id: 'nordic-sweep', name: 'Nordic Sweep', type: 'Physical sweep', ccy: 'DKK' },
+  // A cross-border zero-balancing sweep: the European entities concentrate their
+  // EUR into a UK-held header account daily (see applyEurSweep in views.js).
+  'eur-sweep': { id: 'eur-sweep', name: 'EUR Sweep Pool', type: 'Physical sweep', ccy: 'EUR' },
 }
 
 // The distinct keys each grouping level would produce for a set of sources. A
@@ -393,17 +396,38 @@ export function scopeState(sources, accountIds) {
 // (outFx = 1 → base/GBP; outFx = 8.6 → DKK, etc.). Category metadata is taken
 // from the first entity; values and opening balance are summed element-wise.
 export function consolidate(entities, outFx = 1) {
-  const base = entities[0].state
-  const sumCell = (section, ri, t) =>
-    entities.reduce((s, e) => {
-      const cell = e.state[section]?.[ri]?.values?.[t]
-      return s + (Number(cell) || 0) / e.fx
-    }, 0) * outFx
-  const sumSection = (section) =>
-    base[section].map((row, ri) => ({ ...row, values: row.values.map((_, t) => sumCell(section, ri, t)) }))
+  const days = entities[0].state.days
+  const D = days.length
+  // Union rows across entities by category code (falling back to id for hand-added
+  // rows that carry no code), rather than by position. Entities needn't share an
+  // identical row set — e.g. only the sweep pool's members carry the Sweep legs,
+  // and the header carries only the inflow leg — so nothing gets dropped or
+  // misaligned. Metadata is taken from the first entity that has each key.
+  const sumSection = (section) => {
+    const order = []
+    const meta = new Map()
+    for (const e of entities) {
+      for (const row of e.state[section] ?? []) {
+        const key = row.code ?? row.id
+        if (!meta.has(key)) { meta.set(key, row); order.push(key) }
+      }
+    }
+    return order.map((key) => {
+      const values = new Array(D).fill(0)
+      for (const e of entities) {
+        // sum every row that shares this key — an entity can carry more than one
+        // (e.g. a Sweep leg per pool account), which a find-first would drop
+        for (const row of e.state[section] ?? []) {
+          if ((row.code ?? row.id) !== key) continue
+          for (let t = 0; t < D; t++) values[t] += (Number(row.values[t]) || 0) / e.fx
+        }
+      }
+      return { ...meta.get(key), values: values.map((v) => v * outFx) }
+    })
+  }
   return {
     openingBalance: entities.reduce((s, e) => s + (Number(e.state.openingBalance) || 0) / e.fx, 0) * outFx,
-    days: base.days,
+    days,
     inflows: sumSection('inflows'),
     outflows: sumSection('outflows'),
   }
@@ -608,6 +632,20 @@ const MODEL_DRIVERS = {
 }
 
 export function modelDetail(row) {
+  // A cash sweep isn't a forecast — it's a deterministic treasury rule whose
+  // amount is just the residual of the account's already-modelled operational
+  // categories, swept out each day. Not modelled, but not hand-typed either.
+  if (row.code === 'SWEEP') {
+    return {
+      manual: true,
+      name: 'Zero-balancing sweep',
+      category: 'Treasury',
+      blurb: 'Not a forecast — a treasury rule. Each business day the account’s modelled operational net is swept to the UK EUR header, so the account zero-balances to its opening and the sweep nets to zero across the group.',
+      drivers: ['Account operational net', 'Sweep frequency', 'Target balance', 'Header account'],
+      owner: 'Group Treasury',
+      stats: [],
+    }
+  }
   if (!row.modelled || !row.model) {
     return {
       manual: true,

@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
 import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
 import {
-  BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, makeEntity,
+  BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView,
 } from './views.js'
 import AlignedChart from './components/AlignedChart.jsx'
@@ -55,9 +55,7 @@ function useMeasuredWidth() {
 
 export default function App() {
   // One dataset per entity; SUMMARY is derived (a consolidation), not stored.
-  const [tabStates, setTabStates] = useState(() =>
-    Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)]))
-  )
+  const [tabStates, setTabStates] = useState(() => buildEntityStates())
   const [activeTab, setActiveTab] = useState('summary')
   const [groupCurrency, setGroupCurrency] = useState(BASE_CCY) // display currency for the GROUP tab
   const view = useMemo(() => resolveView(activeTab), [activeTab])
@@ -1004,7 +1002,7 @@ export default function App() {
         <Metric
           label="Lowest point"
           value={lowest}
-          tone={lowest < 0 ? 'danger' : 'ok'}
+          tone={lowest < 0 ? 'danger' : undefined}
           impact={buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
         />
       </section>
