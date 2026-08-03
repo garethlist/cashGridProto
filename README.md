@@ -107,12 +107,21 @@ Actions workflow, which uploads it as a downloadable run artifact.
 
 ## Live demo
 
-The [`deploy-pages`](.github/workflows/deploy.yml) workflow publishes the app to
-**GitHub Pages** on every push to `main`:
+Every push to `main` deploys to **Azure Static Web Apps** — this is the link to
+share:
+<https://salmon-smoke-0d6197c10.7.azurestaticapps.net/>
+
+Built and published by
+[`azure-static-web-apps-salmon-smoke-0d6197c10`](.github/workflows/azure-static-web-apps-salmon-smoke-0d6197c10.yml),
+which builds `dist/` on Node 20 and uploads it with `skip_app_build`. Pull
+requests get their own preview environment from the same workflow.
+
+The [`deploy-pages`](.github/workflows/deploy.yml) workflow also publishes to
+**GitHub Pages** on the same trigger:
 <https://garethlist.github.io/cashGridProto/>
 
-(Requires Pages to be enabled once — *Settings → Pages → Build and deployment →
-Source: GitHub Actions*.)
+(Pages needs enabling once — *Settings → Pages → Build and deployment → Source:
+GitHub Actions* — and stays 404 while the repository is private.)
 
 ## Project structure
 
