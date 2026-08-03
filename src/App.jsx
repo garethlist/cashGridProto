@@ -2,14 +2,17 @@ import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } fr
 import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
-  CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView,
+  CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView, EUR_SWEEP,
+  CONTRIB_COLORS, accountBalances, fxConv,
 } from './views.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
 import ShocksPanel from './components/ShocksPanel.jsx'
 import UnderlyingPanel from './components/UnderlyingPanel.jsx'
 import ModelPanel from './components/ModelPanel.jsx'
+import BalancePanel from './components/BalancePanel.jsx'
 import ShockIcon from './components/ShockIcon.jsx'
+import FinderIcon from './components/FinderIcon.jsx'
 import CategoryTag from './components/CategoryTag.jsx'
 import { CurrencyProvider, useMoney } from './currency.jsx'
 
@@ -28,14 +31,15 @@ const TARGET_COLS = { day: 14, week: 13, month: 12 }
 // Floor so columns never collapse on a narrow window (then it scrolls instead).
 const MIN_COL_W = { day: 46, week: 64, month: 88 }
 
+// How many selected categories the header names before it collapses the rest to
+// a count. The header shares the title's line, so it can't be allowed to grow.
+const HEAD_CHIPS = 3
+
 const GRANULARITIES = [
   { key: 'day', label: 'Days' },
   { key: 'week', label: 'Weeks' },
   { key: 'month', label: 'Months' },
 ]
-
-// Uniun brand palette — blue / teal / orange / purple
-const CONTRIB_COLORS = ['#0078ff', '#16bba4', '#ff9600', '#b849ff']
 
 // Track the available width of an element (excludes scrollbar), live on resize.
 function useMeasuredWidth() {
@@ -82,7 +86,7 @@ export default function App() {
       const outFx = CCY_FX[displayCurrency] ?? 1
       return view.entityIds.map((id) => {
         const e = ENTITIES.find((x) => x.id === id)
-        return { meta: { currency: e.currency }, state: states[id], fx: e.fx, conv: (v) => (v / e.fx) * outFx }
+        return { meta: { currency: e.currency }, state: states[id], fx: e.fx, conv: fxConv(e.fx, outFx) }
       })
     },
     [view.entityIds, displayCurrency]
@@ -135,7 +139,8 @@ export default function App() {
   const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 800))
   const [gridMode, setGridMode] = useState('base') // 'base' (click a cell → underlying data) | 'shocks' (click a row → isolate + add shocks)
   const [showContrib, setShowContrib] = useState(false) // contributions strip is tall — off by default
-  const [showScenario, setShowScenario] = useState(true) // the scenario/compare control line
+  const [showScenario, setShowScenario] = useState(false) // the scenario/compare control line — opt in
+  const [findLow, setFindLow] = useState(false) // "low point finder" — pin + highlight the lowest point on the chart
   // Row grouping under Inflow/Outflow: either one level, or a drill-down chain.
   // Each mode keeps its own selection so switching between them is lossless.
   const [groupMulti, setGroupMulti] = useState(false)
@@ -149,8 +154,10 @@ export default function App() {
     () => (groupMulti ? groupChain : [groupSingle]),
     [groupMulti, groupChain, groupSingle]
   )
-  // Shocks can't be entered on an account/pool cut, so drop back to base mode.
-  useEffect(() => { if (isScoped) setGridMode('base') }, [isScoped])
+  // Row mode isn't only a shock entry point — it's how categories get onto the
+  // chart — so it stays available on the account/pool cuts. Only the per-cell
+  // shock controls drop away there (see canShock), since a cut has no company
+  // row to write a shock back to.
 
   // Sliding pink underline under whichever view is active (Group vs Local grids).
   const viewtabsRef = useRef(null)
@@ -190,21 +197,33 @@ export default function App() {
     if (e.key === 'ArrowRight') { e.preventDefault(); setLabelW((w) => Math.min(LABEL_W_MAX, w + step)) }
     if (e.key === 'Home') { e.preventDefault(); setLabelW(LABEL_W_DEFAULT) }
   }, [])
-  const [focus, setFocus] = useState(null) // { section, id } — isolate a category's flow in the chart
+  // Row mode: the categories isolated on the chart, as [{ section, id }] against
+  // the grid's own row ids. One row reads as a drill-in; several plot the net of
+  // the set, which is how you see a group of categories' combined effect — e.g.
+  // every operational category on a swept account, which the sweep otherwise
+  // flattens out of the balance.
+  const [selection, setSelection] = useState([])
   const [underlying, setUnderlying] = useState(null) // { section, row, bucket, data } for the Base-mode detail panel
+  // Which end of the horizon the left-hand balance panel is showing, if any:
+  // 'opening' (actual, yesterday's closing ledger) or 'closing' (forecast).
+  const [balanceMode, setBalanceMode] = useState(null)
+  // Where a drill-through from the balance panel started — { tabId, title } —
+  // so the panel can offer the way back. Only set by that drill; any other route
+  // to another grid clears it (see goToTab), since the trail no longer holds.
+  const [balanceOrigin, setBalanceOrigin] = useState(null)
 
   // Leaving Shocks mode drops any isolated category so the chart returns to balance.
   useEffect(() => {
-    if (gridMode !== 'shocks') setFocus(null)
+    if (gridMode !== 'shocks') setSelection([])
     if (gridMode !== 'base') setUnderlying(null)
   }, [gridMode])
 
   // Switching grids drops any row-level selection — neither the clicked cell nor
-  // the isolated row is necessarily on the grid you've moved to.
-  useEffect(() => { setFocus(null); setUnderlying(null) }, [activeTab])
+  // the isolated rows are necessarily on the grid you've moved to.
+  useEffect(() => { setSelection([]); setUnderlying(null) }, [activeTab])
 
   // Re-grouping replaces the rows, so any row-level selection no longer applies.
-  useEffect(() => { setFocus(null); setUnderlying(null) }, [groupSelection])
+  useEffect(() => { setSelection([]); setUnderlying(null) }, [groupSelection])
 
   const openScratchpad = useCallback(() => setScratchpad(true), [])
   const closeScratchpad = useCallback(() => {
@@ -265,7 +284,9 @@ export default function App() {
   const [shocks, setShocks] = useState({}) // `${section}:${id}` -> shock[]
   const [shocksOpen, setShocksOpen] = useState(false)
 
-  const focusKey = focus ? `${focus.section}:${focus.id}` : null
+  // Shocks are entered against one category, so the shock controls only engage
+  // when the selection is a single row.
+  const focusKey = selection.length === 1 ? `${selection[0].section}:${selection[0].id}` : null
   const focusShocks = focusKey ? shocks[focusKey] || [] : []
 
   // Active shocks only, scoped to the grid currently being viewed, with ongoing
@@ -384,10 +405,24 @@ export default function App() {
     setBandIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   }, [])
 
-  // Click a category row to isolate its flow; click again to clear.
-  const toggleFocus = useCallback((section, id) => {
-    setFocus((cur) => (cur && cur.section === section && cur.id === id ? null : { section, id }))
+  // Click a category row to add its flow to the chart; click again to drop it.
+  // Selection is additive, so a set of categories builds up without modifier keys.
+  const toggleFocus = useCallback((section, row) => {
+    setSelection((cur) =>
+      cur.some((s) => s.section === section && s.id === row.id)
+        ? cur.filter((s) => !(s.section === section && s.id === row.id))
+        : [...cur, { section, id: row.id }]
+    )
   }, [])
+  // Whole-section select/clear, driven from the Inflow / Outflow headers. Only
+  // leaf rows are passed in — a drill-down parent would double-count its children.
+  const setSectionSelected = useCallback((section, rowIds, on) => {
+    setSelection((cur) => {
+      const rest = cur.filter((s) => s.section !== section || !rowIds.includes(s.id))
+      return on ? [...rest, ...rowIds.map((id) => ({ section, id }))] : rest
+    })
+  }, [])
+  const clearSelection = useCallback(() => setSelection([]), [])
 
   // Effective state = base figures with manual shocks baked in, so shocks flow
   // through to category rows, totals, net, closing balance and the chart.
@@ -492,6 +527,56 @@ export default function App() {
   }, [state.days])
   const closeUnderlying = useCallback(() => setUnderlying(null), [])
 
+  // Entity data with each company's own shocks baked in — the same figures the
+  // grid is built from, so an account's forecast balance reconciles with it.
+  const shockedStates = useMemo(
+    () => Object.fromEntries(ENTITIES.map((e) => [e.id, shockState(tabStates[e.id], shocksForTab(e.id))])),
+    [tabStates, shocksForTab]
+  )
+  // The balance at whichever end of the horizon is being inspected, broken into
+  // the bank accounts the active grid draws on. The panel is left open across grid
+  // changes — it re-reads for whichever grid you land on, which is what makes
+  // clicking through to an account work.
+  const breakdown = useMemo(
+    () => accountBalances(shockedStates, view, displayCurrency, balanceMode ?? 'opening'),
+    [shockedStates, view, displayCurrency, balanceMode]
+  )
+  const closeBalance = useCallback(() => setBalanceMode(null), [])
+  // Every other route to another grid — the tab strip, the view picker, the
+  // contributions legend, a shock's source link — abandons the drill-through, so
+  // the breadcrumb goes with it.
+  const goToTab = useCallback((id) => {
+    setBalanceOrigin(null)
+    setActiveTab(id)
+  }, [])
+  // Drill from the panel into one account's own grid, remembering where we came
+  // from. The first origin is kept, so "back" always returns to where the trail
+  // started rather than one hop up it.
+  const drillToAccount = useCallback((acctId) => {
+    const id = acctTab(acctId)
+    if (id === activeTab) return
+    setBalanceOrigin((cur) => cur ?? { tabId: activeTab, title: view.title })
+    setActiveTab(id)
+  }, [activeTab, view.title])
+  const backToOrigin = useCallback(() => {
+    if (balanceOrigin) setActiveTab(balanceOrigin.tabId)
+    setBalanceOrigin(null)
+  }, [balanceOrigin])
+  useEffect(() => {
+    if (!balanceMode) return undefined
+    const onKey = (e) => e.key === 'Escape' && closeBalance()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [balanceMode, closeBalance])
+  // Open on one end of the horizon, and bring the cell it refers to into view —
+  // the closing cell is at the far right of a year-long grid, so a highlight on
+  // its own would land off-screen.
+  const showBalance = useCallback((next) => {
+    setBalanceMode((cur) => (cur === next ? null : next))
+    const box = scrollRef.current
+    if (box) box.scrollTo({ left: next === 'closing' ? box.scrollWidth : 0, behavior: 'smooth' })
+  }, [])
+
   // Model detail sheet, opened from the right-hand half of a category capsule.
   const [modelRow, setModelRow] = useState(null)
   const [modelClosing, setModelClosing] = useState(false)
@@ -523,18 +608,62 @@ export default function App() {
 
   const ordinals = useMemo(() => monthOrdinals(state.days), [state.days])
 
+  // A zero-balancing participant's line is pinned flat at zero by design, which
+  // looks like missing data unless the chart says why. Read from the rows rather
+  // than the pool's declared type: only accounts that actually carry a sweep leg
+  // are swept, so this can't label an account the sweep never touches.
+  const chartNote = useMemo(() => {
+    if (view.kind !== 'account') return null
+    if (!state.outflows.some((r) => r.code === 'SWEEP')) return null
+    const header = ALL_ACCOUNTS.find((a) => a.pool === view.account.pool && a.entityId === EUR_SWEEP.header)
+    return {
+      label: 'Sweeping account',
+      detail: header ? `Swept daily to ${header.name}` : 'Swept daily to the pool header',
+    }
+  }, [view, state.outflows])
+
+  // Shock day-ranges per selected row, so each row's own cells can mark where a
+  // shock already sits. Keyed the same way shocks themselves are.
+  const shockRangesByRow = useMemo(() => {
+    const out = {}
+    for (const [key, arr] of Object.entries(activeResolvedShocks)) {
+      out[key] = arr.map((s) => ({ start: s.dayStart, end: s.dayEnd }))
+    }
+    return out
+  }, [activeResolvedShocks])
+
   // Base is always the primary line; the dropdown adds at most one scenario.
   const base = useMemo(() => SCENARIOS.find((s) => s.id === 'base'), [])
   const overlays = useMemo(() => SCENARIOS.filter((s) => s.id !== 'base'), [])
 
-  // The focused category (if any) and its signed daily flow (outflows go negative).
-  const focusRow = useMemo(() => {
-    if (!focus) return null
-    const row = state[focus.section]?.find((r) => r.id === focus.id)
-    if (!row) return null
-    const sign = focus.section === 'outflows' ? -1 : 1
-    return { ...row, section: focus.section, series: row.values.map((v) => (Number(v) || 0) * sign) }
-  }, [focus, state])
+  // The selected categories, resolved against the grid's own rows. The series is
+  // read off the row rather than looked up in `state`: a grid row can roll up
+  // several entities and accounts, so there's no single state row behind it.
+  const focusRows = useMemo(() => {
+    if (!selection.length) return []
+    const byKey = new Map()
+    for (const r of agg.inflowRows) byKey.set(`inflows:${r.id}`, { ...r, section: 'inflows' })
+    for (const r of agg.outflowRows) byKey.set(`outflows:${r.id}`, { ...r, section: 'outflows' })
+    return selection.map((s) => byKey.get(`${s.section}:${s.id}`)).filter(Boolean)
+  }, [selection, agg])
+  const focusActive = focusRows.length > 0
+  // A single row still reads as a drill-in — it keeps its own name, model and
+  // shock controls, none of which mean anything for a set.
+  const singleFocus = focusRows.length === 1 ? focusRows[0] : null
+  // The net of the selection: inflows up, outflows down. So selecting everything
+  // on a swept account draws the operational cash flow the sweep flattens out of
+  // the balance, rather than a pile of unrelated magnitudes.
+  const focusSeries = useMemo(() => {
+    if (!focusRows.length) return null
+    const D = state.days.length
+    const out = new Array(D).fill(0)
+    for (const r of focusRows) {
+      const sign = r.section === 'outflows' ? -1 : 1
+      for (let i = 0; i < D; i++) out[i] += sign * (Number(r.values[i]) || 0)
+    }
+    return out
+  }, [focusRows, state.days.length])
+  const focusLabel = singleFocus ? singleFocus.name : `${focusRows.length} categories`
 
   const balanceLines = useMemo(() => {
     const ov = overlays.find((s) => s.id === overlayId)
@@ -611,28 +740,25 @@ export default function App() {
     return result
   }, [base, overlays, overlayId, bandIds, emphasis, daily.dailyClosing, ordinals, divergeShocks, activeShockCount, baseDaily.dailyClosing])
 
-  // The isolated category's own line uses the base pink for every category
-  // (consistent with the main balance line); the scenario overlay carries the
-  // scenario colour.
-  const focusColor = focusRow ? 'var(--brand)' : null
+  // The isolated line uses the base pink for every category (consistent with the
+  // main balance line); the scenario overlay carries the scenario colour.
+  const focusColor = focusActive ? 'var(--brand)' : null
 
-  // When a category is focused, the chart shows that category's flow, the same
-  // scenario overlay applied to it (if one is chosen), and a dashed "shocked"
-  // line when manual shocks are applied.
+  // With categories selected the chart shows their net flow, the same scenario
+  // overlay applied to it (if one is chosen), and — for a single category — a
+  // dashed "shocked" line when manual shocks are applied.
   const lines = useMemo(() => {
-    if (!focusRow) return balanceLines
-    const sign = focusRow.section === 'outflows' ? -1 : 1
-    const raw = focusRow.values
+    if (!focusActive) return balanceLines
     const ov = overlays.find((s) => s.id === overlayId)
     const overlayProminent = !!ov && emphasis === 'scenario'
     const result = [
       {
         id: 'base',
-        name: focusRow.name,
-        code: focusRow.code,
-        model: focusRow.model,
+        name: focusLabel,
+        code: singleFocus ? singleFocus.code : `${focusRows.length}×`,
+        model: singleFocus ? singleFocus.model : null,
         color: focusColor,
-        series: focusRow.series,
+        series: focusSeries,
         band: bandIds.includes('base'),
         prominent: !overlayProminent,
         muted: overlayProminent,
@@ -645,22 +771,32 @@ export default function App() {
         code: ov.code,
         model: ov.model,
         color: ov.color,
-        series: ov.apply(raw, ordinals).map((v) => v * sign),
+        // every scenario is a per-month multiplier, so applying it to the net of
+        // the selection matches applying it to each category and re-summing
+        series: ov.apply(focusSeries, ordinals),
         band: bandIds.includes(ov.id),
         prominent: overlayProminent,
         muted: !overlayProminent,
       })
     }
-    if (resolvedFocusShocks.length) {
-      const shocked = applyShocks(raw, resolvedFocusShocks).map((v) => v * sign)
-      result.push({ id: 'focus-shock', name: `${focusRow.name} (shocked)`, color: 'var(--sc2)', dash: true, series: shocked, band: false })
+    if (singleFocus && resolvedFocusShocks.length) {
+      const sign = singleFocus.section === 'outflows' ? -1 : 1
+      const shocked = applyShocks(singleFocus.values, resolvedFocusShocks).map((v) => v * sign)
+      result.push({ id: 'focus-shock', name: `${focusLabel} (shocked)`, color: 'var(--sc2)', dash: true, series: shocked, band: false })
     }
     return result
-  }, [focusRow, focusColor, bandIds, overlayId, overlays, emphasis, ordinals, resolvedFocusShocks, balanceLines])
+  }, [focusActive, focusRows.length, singleFocus, focusSeries, focusLabel, focusColor, bandIds, overlayId, overlays, emphasis, ordinals, resolvedFocusShocks, balanceLines])
 
-  // Descriptor for the dropdown's "base" row — the focused category in isolate mode.
-  const dropdownBase = focusRow
-    ? { id: 'base', code: focusRow.code, name: focusRow.name, color: focusColor, model: focusRow.model, description: "This category's own forecast." }
+  // Descriptor for the dropdown's "base" row — the selection in isolate mode.
+  const dropdownBase = focusActive
+    ? {
+        id: 'base',
+        code: singleFocus ? singleFocus.code : `${focusRows.length}×`,
+        name: focusLabel,
+        color: focusColor,
+        model: singleFocus ? singleFocus.model : null,
+        description: singleFocus ? "This category's own forecast." : 'The net of the categories selected on the grid.',
+      }
     : base
 
   // Shock markers overlaid on the chart. In isolate view: the focused category's
@@ -675,23 +811,27 @@ export default function App() {
       reason: s.reason,
     })
     // GROUP consolidates every entity, so all their shocks (plus group-level ones)
-    // show here — matched to the isolated category by code when focused.
+    // show here — matched to the selected categories by code when any are isolated.
     if (isSummary) {
       const all = Object.entries(shocks).flatMap(([key, arr]) => arr.map((s) => ({ key, s })))
-      const items = focusRow ? all.filter(({ s }) => s.catCode === focusRow.code) : all
+      const codes = new Set(focusRows.map((r) => r.code))
+      const items = focusActive ? all.filter(({ s }) => codes.has(s.catCode)) : all
       return items.map(({ key, s }) => mark(key, s))
     }
     // Entity grid: only its own shocks.
     const mine = (s) => (s.source?.tabId ?? activeTab) === activeTab
-    if (focusRow) return focusShocks.filter(mine).map((s) => mark(focusKey, s))
-    const keys = new Set([
-      ...state.inflows.map((r) => `inflows:${r.id}`),
-      ...state.outflows.map((r) => `outflows:${r.id}`),
-    ])
+    // Isolated: the shocks sitting on the selected rows, whether that's one or many.
+    const selected = new Set(focusRows.map((r) => `${r.section}:${r.id}`))
+    const keys = focusActive
+      ? selected
+      : new Set([
+          ...state.inflows.map((r) => `inflows:${r.id}`),
+          ...state.outflows.map((r) => `outflows:${r.id}`),
+        ])
     return Object.entries(shocks)
       .filter(([key]) => keys.has(key))
       .flatMap(([key, arr]) => arr.filter(mine).map((s) => mark(key, s)))
-  }, [isSummary, focusRow, focusShocks, focusKey, shocks, state.inflows, state.outflows, activeTab])
+  }, [isSummary, focusActive, focusRows, shocks, state.inflows, state.outflows, activeTab])
 
   // Size columns so the target count fills the measured width; scroll for more.
   // Widening the category column takes space from the data columns (and vice
@@ -718,8 +858,6 @@ export default function App() {
   const setRowName = useCallback((section, rowId, name) => {
     setState((s) => ({ ...s, [section]: s[section].map((r) => (r.id === rowId ? { ...r, name } : r)) }))
   }, [])
-
-  const setOpeningBalance = useCallback((value) => setState((s) => ({ ...s, openingBalance: value })), [])
 
   const addRow = useCallback((section) => {
     setState((s) => ({
@@ -780,7 +918,7 @@ export default function App() {
       const outFx = CCY_FX[ccy] ?? 1
       const srcs = entityIds.map((id) => {
         const e = ENTITIES.find((x) => x.id === id)
-        return { state: shocked[id], conv: (v) => (v / e.fx) * outFx }
+        return { state: shocked[id], conv: fxConv(e.fx, outFx) }
       })
       const d = computeDaily(scopeState(srcs, accountIds))
       const closing = d.dailyClosing[d.dailyClosing.length - 1] ?? 0
@@ -804,6 +942,7 @@ export default function App() {
   // --- headline metrics (from daily series) ---------------------------------
   const closingEnd = daily.dailyClosing[daily.dailyClosing.length - 1] ?? 0
   const lowest = daily.dailyClosing.length ? Math.min(...daily.dailyClosing) : 0
+  const lowestIdx = daily.dailyClosing.length ? daily.dailyClosing.indexOf(lowest) : -1
   const netTotal = daily.dailyNet.reduce((a, b) => a + b, 0)
 
   const baseClosing = baseDaily.dailyClosing[baseDaily.dailyClosing.length - 1] ?? 0
@@ -847,7 +986,7 @@ export default function App() {
     <CurrencyProvider currency={displayCurrency} locale={displayLocale}>
     <div className="shell">
     <UniunRail theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
-    <div className={`app ${underlying ? 'app--docked' : ''}`}>
+    <div className={`app ${underlying ? 'app--docked' : ''} ${balanceMode ? 'app--docked-left' : ''}`}>
       {/* view tabs — company / currency grid combinations */}
       <div className="tabbar">
         <div className="tabbar__tabs">
@@ -857,7 +996,7 @@ export default function App() {
             <button
               ref={groupTabRef}
               className={`tab tab--summary ${isSummary ? 'tab--on' : ''}`}
-              onClick={() => setActiveTab(SUMMARY.id)}
+              onClick={() => goToTab(SUMMARY.id)}
               title="Consolidated group view"
             >
               <span className="tab__sigma" aria-hidden>Σ</span>
@@ -877,7 +1016,7 @@ export default function App() {
                 groupFmt={groupFmt}
                 groupCcyCode={groupCcy.code}
                 groupClosing={groupClosing}
-                onSelect={setActiveTab}
+                onSelect={goToTab}
               />
             </span>
             <span className="viewtabs__ink" style={ink} aria-hidden />
@@ -941,6 +1080,63 @@ export default function App() {
             )}
           </h1>
         </div>
+        {/* The isolated-flow readout rides the title line rather than occupying a
+            bar of its own. As its own row it appeared and disappeared with the
+            selection, shunting the chart down and up every time you moved between
+            Cell and Row mode; here it sits inside the header's existing height. */}
+        {focusActive && (
+          <div className="focushead">
+            <span className="focushead__label">{singleFocus ? 'Isolated flow' : 'Net of selection'}</span>
+            <span className="focusbar__series">
+              <span className="dd__dot" style={{ background: focusColor }} />
+              {singleFocus ? (
+                <>
+                  <span className="focusbar__name">{singleFocus.name}</span>
+                  {singleFocus.modelled && singleFocus.model ? (
+                    <>
+                      <CategoryTag category={singleFocus.model.category} />
+                      <span className="focusbar__model">{singleFocus.model.name}</span>
+                    </>
+                  ) : (
+                    <span className="tag tag--manual">Manual</span>
+                  )}
+                </>
+              ) : (
+                /* A set has no one model behind it, so it lists what's in it and
+                   each chip drops its own category back out. Capped, and kept on
+                   one line, so a big selection can't grow the header — the grid's
+                   own tickboxes are the full picture. */
+                <span className="focusbar__chips">
+                  {focusRows.slice(0, HEAD_CHIPS).map((r) => (
+                    <button
+                      key={`${r.section}:${r.id}`}
+                      className={`focuschip focuschip--${r.section === 'outflows' ? 'out' : 'in'}`}
+                      onClick={() => toggleFocus(r.section, r)}
+                      title={`Remove ${r.name} from the selection`}
+                    >
+                      <span className="focuschip__dot" style={r.color ? { background: r.color } : undefined} />
+                      <span className="focuschip__name">{r.name}</span>
+                      <span className="focuschip__x" aria-hidden>×</span>
+                    </button>
+                  ))}
+                  {focusRows.length > HEAD_CHIPS && (
+                    <span className="focuschip focuschip--more" title={focusRows.slice(HEAD_CHIPS).map((r) => r.name).join(', ')}>
+                      +{focusRows.length - HEAD_CHIPS}
+                    </span>
+                  )}
+                </span>
+              )}
+              {!singleFocus && (
+                /* Narrow windows squeeze the chips past the point of being
+                   readable, so there the CSS swaps them for this plain count. */
+                <span className="focushead__count" title={focusRows.map((r) => r.name).join(', ')}>
+                  {focusRows.length} categories
+                </span>
+              )}
+            </span>
+            <button className="btn btn--sm" onClick={clearSelection}>← Back to balance</button>
+          </div>
+        )}
         {/* right-aligned, so it lines up with the right edge of the last KPI card */}
         <div className="app__controls">
           <Segmented value={granularity} onChange={setGranularity} />
@@ -971,7 +1167,7 @@ export default function App() {
             <button
               key={c.id}
               className={`contrib__item ${!isSummary && !view.entityIds.includes(c.id) ? 'contrib__item--dim' : ''} ${!isSummary && view.entityIds.includes(c.id) ? 'contrib__item--active' : ''}`}
-              onClick={() => setActiveTab(c.id)}
+              onClick={() => goToTab(c.id)}
               title={`Open ${c.company}`}
             >
               <span className="contrib__dot" style={{ background: CONTRIB_COLORS[i % CONTRIB_COLORS.length] }} />
@@ -987,7 +1183,13 @@ export default function App() {
       )}
 
       <section className="metrics">
-        <Metric label="Opening balance" value={state.openingBalance} />
+        <Metric
+          label="Opening balance"
+          value={state.openingBalance}
+          onFind={() => showBalance('opening')}
+          finding={balanceMode === 'opening'}
+          findTitle={balanceMode === 'opening' ? 'Hide the accounts behind the opening balance' : 'Show the actual account balances this opens on'}
+        />
         <Metric
           label="Net over horizon"
           value={netTotal}
@@ -998,60 +1200,25 @@ export default function App() {
           label="Closing balance"
           value={closingEnd}
           impact={buildImpact(closingEnd, baseClosing, kpiScenario?.closing)}
+          onFind={() => showBalance('closing')}
+          finding={balanceMode === 'closing'}
+          findTitle={balanceMode === 'closing' ? 'Hide the accounts behind the closing balance' : 'Show the forecast account balances this ends on'}
         />
         <Metric
           label="Lowest point"
           value={lowest}
           tone={lowest < 0 ? 'danger' : undefined}
           impact={buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
+          onFind={focusActive || lowestIdx < 0 ? undefined : () => setFindLow((v) => !v)}
+          finding={findLow && !focusActive}
+          findTitle={findLow ? 'Hide the lowest point on the chart' : 'Find the lowest point on the chart'}
         />
       </section>
 
-      {focusRow ? (
-        <div className="scenariobar focusbar">
-          <span className="scenariobar__label">Isolated flow</span>
-          <span className="focusbar__series">
-            <span className="dd__dot" style={{ background: focusColor }} />
-            <span className="focusbar__name">{focusRow.name}</span>
-            {focusRow.modelled && focusRow.model ? (
-              <>
-                <CategoryTag category={focusRow.model.category} />
-                <span className="focusbar__model">{focusRow.model.name}</span>
-              </>
-            ) : (
-              <span className="tag tag--manual">Manual</span>
-            )}
-          </span>
-          {/* the scenario controls hide with the toggle, but the bar itself stays
-              — it carries the only way back out of the isolated view */}
-          {showScenario && (
-            <>
-              <span className="scenariobar__label scenariobar__label--sub">Scenario</span>
-              <OverlayDropdown
-                base={dropdownBase}
-                baseName={focusRow.name}
-                overlays={overlays}
-                overlayId={overlayId}
-                onOverlay={setOverlayId}
-                bandIds={bandIds}
-                onToggleBand={toggleBand}
-              />
-              {overlayId !== 'none' && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
-            </>
-          )}
-          <button
-            className={`btn btn--sm shockapply ${shocksOpen ? 'shockapply--on' : ''}`}
-            onClick={() => setShocksOpen((o) => !o)}
-            aria-pressed={shocksOpen}
-            title="Open the manual shocks panel"
-          >
-            <ShockIcon size={13} />
-            Apply shocks
-            {totalShocks > 0 && <span className="shockapply__count">{totalShocks}</span>}
-          </button>
-          <button className="btn btn--sm" onClick={() => setFocus(null)}>← Back to balance</button>
-        </div>
-      ) : showScenario || activeShockCount > 0 ? (
+      {/* One bar, whatever the grid is showing. The isolation readout has moved to
+          the header, so this carries only the scenario and shock controls — and
+          appears only when you've asked for them. */}
+      {showScenario || activeShockCount > 0 ? (
         <div className="scenariobar">
           {/* Diverge shocks is a shock control, not a scenario one, so it stays
               put when the scenario controls are hidden. */}
@@ -1059,7 +1226,8 @@ export default function App() {
             <>
               <span className="scenariobar__label">Scenario</span>
               <OverlayDropdown
-                base={base}
+                base={dropdownBase}
+                baseName={focusActive ? focusLabel : 'Base'}
                 overlays={overlays}
                 overlayId={overlayId}
                 onOverlay={setOverlayId}
@@ -1069,7 +1237,9 @@ export default function App() {
               {overlayId !== 'none' && !divergeShocks && <EmphasisSwitch value={emphasis} onChange={setEmphasis} />}
             </>
           )}
-          {activeShockCount > 0 && (
+          {/* the divergence splits the balance line, so it has nothing to say
+              while a category selection is on the chart */}
+          {activeShockCount > 0 && !focusActive && (
             <button
               className={`btn btn--sm divergebtn ${divergeShocks ? 'divergebtn--on' : ''}`}
               onClick={() => setDivergeShocks((v) => !v)}
@@ -1090,7 +1260,7 @@ export default function App() {
             {totalShocks > 0 && <span className="shockapply__count">{totalShocks}</span>}
           </button>
           {showScenario && (
-            <span className="scenariobar__hint">± toggles each series' forecast error band · click a category's ⟋ icon to isolate its flow</span>
+            <span className="scenariobar__hint">± toggles each series' forecast error band · switch the grid to Row mode to chart categories</span>
           )}
         </div>
       ) : null}
@@ -1101,7 +1271,7 @@ export default function App() {
           <div className="scratchbar">
             <span className="scratchbar__title">
               <span className="scratchbar__dot" />
-              {view.title} · {focusRow ? focusRow.name : 'Cash forecast'}
+              {view.title} · {focusActive ? focusLabel : 'Cash forecast'}
               <span className="scratchbar__tag">Scratchpad</span>
             </span>
             <button className="scratchbar__close" onClick={closeScratchpad} title="Close scratchpad (Esc)">
@@ -1152,14 +1322,17 @@ export default function App() {
               colW={colW}
               contentW={contentW}
               height={chartH}
-              title={focusRow ? 'Daily flow' : 'Daily balance'}
-              markers={!focusRow}
+              title={focusActive ? 'Daily flow' : 'Daily balance'}
+              note={chartNote}
+              markers={!focusActive}
               annotations={annotations}
               reserveMarkers={gridHasShocks}
               onAnnotationClick={openShock}
+              pinnedDay={findLow && !focusActive && lowestIdx >= 0 ? lowestIdx : null}
+              pinnedLabel="Lowest point"
+              scrollParentRef={scrollRef}
             />
             <ForecastTable
-              state={state}
               buckets={buckets}
               agg={agg}
               granularity={granularity}
@@ -1168,13 +1341,16 @@ export default function App() {
               contentW={contentW}
               onCell={setCell}
               onRowName={setRowName}
-              onOpeningBalance={setOpeningBalance}
+              onOpenBalance={showBalance}
+              balanceMode={balanceMode}
               onAddRow={addRow}
               readOnly={readOnly}
               canShock={!isScoped}
               gridMode={gridMode}
-              focus={focus}
-              focusActive={!!focusRow}
+              selection={selection}
+              focusActive={focusActive}
+              singleFocus={!!singleFocus}
+              onSelectSection={setSectionSelected}
               onFocus={toggleFocus}
               onAddShock={addShock}
               onCellClick={openUnderlying}
@@ -1188,7 +1364,7 @@ export default function App() {
               onGroupChain={setGroupChain}
               groupDisabled={groupDisabled}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
-              shockRanges={resolvedFocusShocks.map((s) => ({ start: s.dayStart, end: s.dayEnd }))}
+              shockRanges={shockRangesByRow}
             />
           </div>
         </div>
@@ -1210,10 +1386,26 @@ export default function App() {
         days={state.days}
         highlight={highlightShock}
         activeTab={activeTab}
-        onGoToSource={setActiveTab}
+        onGoToSource={goToTab}
         onClose={() => setShocksOpen(false)}
         onUpdate={updateShock}
         onRemove={removeShock}
+      />
+
+      <BalancePanel
+        open={!!balanceMode}
+        mode={balanceMode ?? 'opening'}
+        view={view}
+        breakdown={breakdown}
+        total={balanceMode === 'closing' ? closingEnd : state.openingBalance}
+        currency={displayCurrency}
+        firstDay={state.days[0]}
+        lastDay={state.days[state.days.length - 1]}
+        activeTab={activeTab}
+        origin={balanceOrigin}
+        onSelectAccount={drillToAccount}
+        onBack={backToOrigin}
+        onClose={closeBalance}
       />
 
       <UnderlyingPanel
@@ -1300,16 +1492,24 @@ function ViewPicker({
   // The dimension being browsed. Opens on whichever one the active grid belongs
   // to, so the menu always starts where you left off.
   const [dim, setDim] = useState(view.dim)
+  // Free-text filter across every grid's name, currency, bank, account number
+  // and pool — a query in flight overrides the dimension tabs, since finding
+  // an item is more useful here than browsing one dimension at a time.
+  const [query, setQuery] = useState('')
   const ref = useRef(null)
+  const searchRef = useRef(null)
   useEffect(() => {
-    if (!open) return undefined
+    if (!open) { setQuery(''); return undefined }
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     const onKey = (e) => e.key === 'Escape' && setOpen(false)
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
+    // Autofocus so typing can start the moment the menu opens.
+    const t = window.setTimeout(() => searchRef.current?.focus(), 0)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey)
+      window.clearTimeout(t)
     }
   }, [open])
 
@@ -1317,6 +1517,18 @@ function ViewPicker({
   const pick = (id) => { onSelect(id); setOpen(false) }
   const share = (gbp) => (groupClosing ? Math.round(((gbp || 0) / groupClosing) * 100) : 0)
   const total = entities.length + accounts.length + pools.length
+
+  const q = query.trim().toLowerCase()
+  const searching = q.length > 0
+  const hit = (...vals) => vals.some((v) => v && String(v).toLowerCase().includes(q))
+  const matchedEntities = searching ? entities.filter((e) => hit(e.company, e.currency, e.label)) : []
+  const matchedAccounts = searching
+    ? accounts.filter((a) => hit(a.name, a.number, a.bank, a.currency, a.pool && CASH_POOLS[a.pool]?.name))
+    : []
+  const matchedPools = searching
+    ? pools.filter((p) => hit(p.name, p.ccy, p.type, ...p.accounts.map((a) => a.company)))
+    : []
+  const noMatches = searching && !matchedEntities.length && !matchedAccounts.length && !matchedPools.length
 
   // What the capsule reads when a grid is open: its name plus one short chip.
   const chip = view.kind === 'account' ? `···${view.account.number}`
@@ -1345,23 +1557,55 @@ function ViewPicker({
 
       {open && (
         <div className="entpick__menu entpick__menu--dims" role="listbox">
-          {/* top-level dimension, driving the sub-selection below */}
-          <div className="seg seg--dims">
-            {VIEW_DIMS.map((d) => (
+          <div className="entpick__search">
+            <svg className="entpick__searchicon" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+              <circle cx="7" cy="7" r="5" />
+              <path d="M11 11 15 15" />
+            </svg>
+            <input
+              ref={searchRef}
+              className="entpick__searchfield"
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search company, account or pool…"
+              aria-label="Search grids"
+            />
+            {searching && (
               <button
-                key={d.id}
-                className={`seg__btn ${dim === d.id ? 'seg__btn--on' : ''}`}
-                onClick={() => setDim(d.id)}
+                type="button"
+                className="entpick__searchclear"
+                onClick={() => { setQuery(''); searchRef.current?.focus() }}
+                aria-label="Clear search"
+                title="Clear search"
               >
-                {d.label}
+                ×
               </button>
-            ))}
+            )}
           </div>
-          <div className="entpick__head">{head}</div>
+          {/* top-level dimension, driving the sub-selection below — moot once a
+              search is in flight, since results are shown across all of them */}
+          {!searching && (
+            <div className="seg seg--dims">
+              {VIEW_DIMS.map((d) => (
+                <button
+                  key={d.id}
+                  className={`seg__btn ${dim === d.id ? 'seg__btn--on' : ''}`}
+                  onClick={() => setDim(d.id)}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {!searching && <div className="entpick__head">{head}</div>}
+          {noMatches && <div className="entpick__empty">No grids match "{query.trim()}"</div>}
 
-          {dim === 'company' && entities.map((e, i) => {
+          {searching && matchedEntities.length > 0 && <div className="entpick__head">Company</div>}
+          {(searching ? matchedEntities : dim === 'company' ? entities : []).map((e) => {
             const d = byId[e.id] || {}
             const on = e.id === activeTab
+            const i = entities.findIndex((x) => x.id === e.id)
             return (
               <button key={e.id} className={`entrow ${on ? 'entrow--on' : ''}`} role="option" aria-selected={on} onClick={() => pick(e.id)}>
                 <span className="entrow__dot" style={{ background: CONTRIB_COLORS[i % CONTRIB_COLORS.length] }} />
@@ -1385,7 +1629,8 @@ function ViewPicker({
             )
           })}
 
-          {dim === 'account' && accounts.map((a) => {
+          {searching && matchedAccounts.length > 0 && <div className="entpick__head">Bank account</div>}
+          {(searching ? matchedAccounts : dim === 'account' ? accounts : []).map((a) => {
             const id = acctTab(a.id)
             const d = scopeDetails.accounts[a.id] || {}
             const on = id === activeTab
@@ -1411,7 +1656,8 @@ function ViewPicker({
             )
           })}
 
-          {dim === 'pool' && pools.map((p) => {
+          {searching && matchedPools.length > 0 && <div className="entpick__head">Cash pool</div>}
+          {(searching ? matchedPools : dim === 'pool' ? pools : []).map((p) => {
             const id = poolTab(p.id)
             const d = scopeDetails.pools[p.id] || {}
             const on = id === activeTab
@@ -1654,16 +1900,30 @@ function shortName(name) {
   return name.split(' ')[0]
 }
 
-function Metric({ label, value, tone, signed, impact }) {
+function Metric({ label, value, tone, signed, impact, onFind, finding, findTitle }) {
   const { money0, signed: signedFmt } = useMoney()
   const cls = ['metric']
   if (tone === 'danger') cls.push('metric--danger')
   if (tone === 'ok') cls.push('metric--ok')
+  if (finding) cls.push('metric--finding')
   const fmt = signed ? signedFmt : money0
   return (
     <div className={cls.join(' ')}>
       <div className="metric__main">
-        <span className="metric__label">{label}</span>
+        <div className="metric__head">
+          <span className="metric__label">{label}</span>
+          {onFind && (
+            <button
+              type="button"
+              className={`metric__find ${finding ? 'metric__find--on' : ''}`}
+              onClick={onFind}
+              aria-pressed={!!finding}
+              title={findTitle || 'Find on chart'}
+            >
+              <FinderIcon size={13} />
+            </button>
+          )}
+        </div>
         <span className="metric__value">{fmt(value)}</span>
       </div>
       {impact && (

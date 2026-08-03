@@ -11,10 +11,17 @@ export function CurrencyProvider({ currency, locale, children }) {
 export function useMoney() {
   const { currency, locale } = useContext(CurrencyContext)
   return useMemo(() => {
-    const money0 = (v) =>
-      Number(v || 0).toLocaleString(locale, { style: 'currency', currency, maximumFractionDigits: 0 })
-    const signed = (v) => {
+    // A zero-balancing account nets to zero only to within float precision, so
+    // snap anything under half a unit to a clean 0 — otherwise the residue shows
+    // up as "-0" once the fractional digits are dropped.
+    const snap = (v) => {
       const n = Number(v) || 0
+      return Math.abs(n) < 0.5 ? 0 : n
+    }
+    const money0 = (v) =>
+      snap(v).toLocaleString(locale, { style: 'currency', currency, maximumFractionDigits: 0 })
+    const signed = (v) => {
+      const n = snap(v)
       return n > 0 ? `+${money0(n)}` : money0(n)
     }
     // currency symbol only (strip digits/spaces/separators from a formatted 0)

@@ -39,6 +39,10 @@ const isWeekday = (iso) => {
   return dow >= 1 && dow <= 5
 }
 
+// The day before an ISO date. The grid opens on "today", so its opening balance
+// is the previous day's closing ledger position — see accountBalances.
+export const prevDayISO = (iso) => ymd(addUTCDays(parseISO(iso), -1))
+
 export function dayLabel(iso) {
   const d = parseISO(iso)
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`
@@ -301,7 +305,9 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
   }
 
   const rowsFor = (section) => {
-    const atoms = atomsFor(section)
+    // The sweep is excluded here — it isn't an operational category and is shown
+    // on its own row (see `sweep` below), not inside the Inflow/Outflow groupings.
+    const atoms = atomsFor(section).filter((a) => a.code !== 'SWEEP')
     const out = []
     walk(atoms, levels, 0, section, out)
     const bucketed = out.map((r) => ({
@@ -318,12 +324,27 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
   const outflow = rowsFor('outflows')
   const net = buckets.map((_, bi) => inflow.total[bi] - outflow.total[bi])
 
+  // The sweep is the end-of-day zero-balancing move — a direct result of the net
+  // movement above, not an operational category. It's kept out of the Inflow/
+  // Outflow groupings and surfaced on its own row beside Net movement, but it
+  // still lands in the closing balance. `sweep` is its signed effect on the
+  // balance (positive = cash swept in, negative = swept out).
+  const sweepIn = atomsFor('inflows').filter((a) => a.code === 'SWEEP')
+  const sweepOut = atomsFor('outflows').filter((a) => a.code === 'SWEEP')
+  const hasSweep = sweepIn.length > 0 || sweepOut.length > 0
+  const sweep = buckets.map((b) =>
+    b.dayIndices.reduce(
+      (s, i) => s + sweepIn.reduce((t, a) => t + a.values[i], 0) - sweepOut.reduce((t, a) => t + a.values[i], 0),
+      0,
+    )
+  )
+
   const opening = new Array(buckets.length)
   const closing = new Array(buckets.length)
   let prev = Number(openingBalance) || 0
   for (let bi = 0; bi < buckets.length; bi++) {
     opening[bi] = prev
-    closing[bi] = prev + net[bi]
+    closing[bi] = prev + net[bi] + sweep[bi]
     prev = closing[bi]
   }
 
@@ -333,6 +354,8 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
     totalInflows: inflow.total,
     totalOutflows: outflow.total,
     net,
+    sweep,
+    hasSweep,
     opening,
     closing,
   }

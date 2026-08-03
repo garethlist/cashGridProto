@@ -7,7 +7,6 @@ import { useMoney } from '../currency.jsx'
 // Cells are editable only in Days view (the atomic level); aggregated
 // Weeks/Months views show read-only totals.
 export default function ForecastTable({
-  state,
   buckets,
   agg,
   granularity,
@@ -16,13 +15,16 @@ export default function ForecastTable({
   contentW,
   onCell,
   onRowName,
-  onOpeningBalance,
+  onOpenBalance,
+  balanceMode,
   onAddRow,
   readOnly,
   canShock = true,
-  focus,
+  selection,
   focusActive,
+  singleFocus,
   onFocus,
+  onSelectSection,
   onAddShock,
   onCellClick,
   onOpenModel,
@@ -36,11 +38,11 @@ export default function ForecastTable({
   groupDisabled,
   underlyingCell,
   gridMode = 'base',
-  shockRanges = [],
+  shockRanges = {},
 }) {
   const editable = granularity === 'day' && !readOnly
   const { num0, dashNum } = useMoney()
-  const { inflowRows, outflowRows, totalInflows, totalOutflows, net, opening, closing } = agg
+  const { inflowRows, outflowRows, totalInflows, totalOutflows, net, sweep, hasSweep, opening, closing } = agg
   const [collapsed, setCollapsed] = useState({})
   const toggle = (s) => setCollapsed((c) => ({ ...c, [s]: !c[s] }))
   // collapsed group nodes, keyed by their tree path
@@ -52,6 +54,13 @@ export default function ForecastTable({
   const allClosed = parentPaths.length > 0 && parentPaths.every((p) => closedGroups[p])
   const toggleAllGroups = () =>
     setClosedGroups(allClosed ? {} : Object.fromEntries(parentPaths.map((p) => [p, true])))
+
+  // Which rows are on the chart. Membership is by grid-row id, so it survives
+  // collapsing and expanding but not a change of grouping (which rebuilds the ids).
+  const selected = new Set((selection ?? []).map((s) => `${s.section}:${s.id}`))
+  // Only leaf rows can be selected — a drill-down parent would double-count the
+  // children sitting under it.
+  const leafIds = (rows) => rows.filter((r) => !r.hasChildren && !r.synthetic).map((r) => r.id)
 
   // a row hides if its section is collapsed or any ancestor group is closed
   const groupHidden = (row) => {
@@ -76,8 +85,9 @@ export default function ForecastTable({
         <tr>
           <th className={`grid__rowhead grid__rowhead--corner ${groupMenuOpen ? 'grid__rowhead--menuopen' : ''}`}>
             <span className="rowhead__inner">
-              {/* account / pool grids are cuts through company data — no shocks */}
-              {canShock && <ModeSwitch value={gridMode} onChange={onGridMode} />}
+              {/* Row mode charts categories everywhere; on account / pool grids —
+                  cuts through company data — it just can't also enter shocks. */}
+              <ModeSwitch value={gridMode} onChange={onGridMode} canShock={canShock} />
               <GroupingPicker
                 multi={groupMulti}
                 onMulti={onGroupMulti}
@@ -127,11 +137,13 @@ export default function ForecastTable({
             </span>
           </td>
           {buckets.map((b, bi) => (
-            <td key={b.key} className="grid__cell">
-              {bi === 0 && !readOnly ? (
-                <EditableCell value={state.openingBalance} onChange={onOpeningBalance} />
+            /* The first cell is the balance the grid opens on — click it for the
+               bank accounts it's made of. The rest just carry it forward. */
+            <td key={b.key} className={`grid__cell ${bi === 0 ? 'grid__cell--balcell' : ''} ${bi === 0 && balanceMode === 'opening' ? 'grid__cell--active' : ''}`}>
+              {bi === 0 ? (
+                <BalanceCell value={opening[bi]} num0={num0} mode="opening" active={balanceMode === 'opening'} onOpen={onOpenBalance} />
               ) : (
-                <span className="cell cell--strong">{num0(opening[bi])}</span>
+                <span className={`cell cell--strong ${opening[bi] < 0 ? 'is-neg' : ''}`}>{num0(opening[bi])}</span>
               )}
             </td>
           ))}
@@ -147,6 +159,10 @@ export default function ForecastTable({
           values={totalInflows}
           dashNum={dashNum}
           span={buckets.length}
+          selectable={gridMode === 'shocks'}
+          selectedCount={leafIds(inflowRows).filter((id) => selected.has(`inflows:${id}`)).length}
+          totalCount={leafIds(inflowRows).length}
+          onSelectAll={(on) => onSelectSection('inflows', leafIds(inflowRows), on)}
         />
         {inflowRows.map((row) => (
             <LineRow
@@ -162,14 +178,16 @@ export default function ForecastTable({
               onCell={onCell}
               onRowName={onRowName}
               readOnly={readOnly}
-              focused={focus?.section === 'inflows' && focus?.id === row.id}
-              onFocus={() => onFocus('inflows', row.id)}
+              focused={selected.has(`inflows:${row.id}`)}
+              singleFocus={singleFocus}
+              canShock={canShock}
+              onFocus={() => onFocus('inflows', row)}
               onAddShock={onAddShock}
               onCellClick={onCellClick}
               onOpenModel={onOpenModel}
               gridMode={gridMode}
               underlyingCell={underlyingCell}
-              shockRanges={focus?.section === 'inflows' && focus?.id === row.id ? shockRanges : null}
+              shockRanges={shockRanges[`inflows:${row.id}`] ?? null}
             />
           ))}
 
@@ -183,6 +201,10 @@ export default function ForecastTable({
           values={totalOutflows}
           dashNum={dashNum}
           span={buckets.length}
+          selectable={gridMode === 'shocks'}
+          selectedCount={leafIds(outflowRows).filter((id) => selected.has(`outflows:${id}`)).length}
+          totalCount={leafIds(outflowRows).length}
+          onSelectAll={(on) => onSelectSection('outflows', leafIds(outflowRows), on)}
         />
         {outflowRows.map((row) => (
             <LineRow
@@ -198,14 +220,16 @@ export default function ForecastTable({
               onCell={onCell}
               onRowName={onRowName}
               readOnly={readOnly}
-              focused={focus?.section === 'outflows' && focus?.id === row.id}
-              onFocus={() => onFocus('outflows', row.id)}
+              focused={selected.has(`outflows:${row.id}`)}
+              singleFocus={singleFocus}
+              canShock={canShock}
+              onFocus={() => onFocus('outflows', row)}
               onAddShock={onAddShock}
               onCellClick={onCellClick}
               onOpenModel={onOpenModel}
               gridMode={gridMode}
               underlyingCell={underlyingCell}
-              shockRanges={focus?.section === 'outflows' && focus?.id === row.id ? shockRanges : null}
+              shockRanges={shockRanges[`outflows:${row.id}`] ?? null}
             />
           ))}
 
@@ -227,18 +251,73 @@ export default function ForecastTable({
           ))}
         </tr>
 
+        {/* Sweep: the end-of-day zero-balancing move, a direct consequence of the
+            net movement above. Kept out of the Inflow/Outflow groupings and pinned
+            here beside Net movement; it still folds into the closing balance. */}
+        {hasSweep && (
+          <tr className="grid__row grid__row--move grid__row--sweep">
+            <td className="grid__rowhead">
+              <span className="rowhead__inner">
+                <span className="caret caret--spacer" aria-hidden />
+                <span className="grid__dot grid__dot--sweep" />
+                <span className="grid__sectiontitle">Sweep</span>
+              </span>
+            </td>
+            {sweep.map((v, bi) => (
+              <td key={bi} className="grid__cell">
+                <span className={`cell cell--section ${v < 0 ? 'is-neg' : ''}`}>{dashNum(v)}</span>
+              </td>
+            ))}
+          </tr>
+        )}
+
         <tr className="grid__row grid__row--bal grid__row--closing">
           <td className="grid__rowhead">
             <span className="grid__baltitle">Closing balance</span>
           </td>
-          {closing.map((v, bi) => (
-            <td key={bi} className="grid__cell">
-              <span className={`cell cell--strong ${v < 0 ? 'is-neg' : ''}`}>{num0(v)}</span>
-            </td>
-          ))}
+          {closing.map((v, bi) => {
+            // The horizon's last column is where the forecast lands, so that's
+            // the cell the closing breakdown hangs off — the mirror of the
+            // opening balance's first cell.
+            const last = bi === closing.length - 1
+            return (
+              <td key={bi} className={`grid__cell ${last ? 'grid__cell--balcell' : ''} ${last && balanceMode === 'closing' ? 'grid__cell--active' : ''}`}>
+                {last ? (
+                  <BalanceCell value={v} num0={num0} mode="closing" active={balanceMode === 'closing'} onOpen={onOpenBalance} />
+                ) : (
+                  <span className={`cell cell--strong ${v < 0 ? 'is-neg' : ''}`}>{num0(v)}</span>
+                )}
+              </td>
+            )
+          })}
         </tr>
       </tbody>
     </table>
+  )
+}
+
+// A balance figure that doubles as the way into its account breakdown. The two
+// ends of the horizon carry one each: the opening is actual, the closing forecast
+// — the panel draws that distinction, this is just the handle.
+function BalanceCell({ value, num0, mode, active, onOpen }) {
+  const closing = mode === 'closing'
+  const noun = closing ? 'closing' : 'opening'
+  return (
+    <button
+      className="cell cell--strong balcell"
+      onClick={() => onOpen(mode)}
+      aria-expanded={active}
+      title={active
+        ? `Hide the accounts behind the ${noun} balance`
+        : closing
+          ? 'Show the forecast account balances this ends on'
+          : 'Show the actual account balances this opens on'}
+    >
+      <span className={value < 0 ? 'is-neg' : undefined}>{num0(value)}</span>
+      <svg className="balcell__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M6 3.5 10.5 8 6 12.5" />
+      </svg>
+    </button>
   )
 }
 
@@ -254,6 +333,10 @@ const GROUPINGS = [
 
 function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disabled = {}, onOpenChange }) {
   const [open, setOpen] = useState(false)
+  // Drag-to-reorder state for the drill-down levels: the level being dragged and
+  // the one it's hovering over (for the drop indicator).
+  const [dragId, setDragId] = useState(null)
+  const [overId, setOverId] = useState(null)
   useEffect(() => { onOpenChange?.(open) }, [open, onOpenChange])
   const ref = useRef(null)
   useEffect(() => {
@@ -290,17 +373,18 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
       onChain([...chain, id])
     }
   }
-  // Reorder against the levels that are actually applied, skipping over any
-  // retired ones sitting dormant in the chain — otherwise a swap with a dormant
-  // neighbour would look like the button did nothing.
-  const move = (id, dir) => {
-    const li = live.indexOf(id)
-    const lj = li + dir
-    if (li < 0 || lj < 0 || lj >= live.length) return
-    const i = chain.indexOf(id)
-    const j = chain.indexOf(live[lj])
+  // Drag one applied level onto another to drop it into that slot. The reorder
+  // runs against the levels actually applied, skipping over any retired ones
+  // sitting dormant in the chain, then writes the new order back into the live
+  // slots of `chain` — leaving the dormant levels anchored where they sit.
+  const reorder = (from, to) => {
+    if (!from || from === to) return
+    if (live.indexOf(from) < 0 || live.indexOf(to) < 0) return
+    const seq = live.filter((id) => id !== from)
+    seq.splice(seq.indexOf(to), 0, from)
+    const slots = chain.map((id, i) => (disabled[id] ? -1 : i)).filter((i) => i >= 0)
     const next = [...chain]
-    ;[next[i], next[j]] = [next[j], next[i]]
+    slots.forEach((slot, k) => { next[slot] = seq[k] })
     onChain(next)
   }
 
@@ -343,8 +427,34 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
                 // running, so it shows no level number and no reorder arrows.
                 const inChain = chain.includes(id) && !off
                 const pos = live.indexOf(id)
+                const dragging = dragId === id
+                const draggable = inChain && live.length > 1
                 return (
-                  <span key={id} className={`grouprow ${inChain ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''}`}>
+                  <span
+                    key={id}
+                    className={`grouprow ${inChain ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''} ${dragging ? 'grouprow--dragging' : ''} ${overId === id && dragId && !dragging ? 'grouprow--drop' : ''}`}
+                    onDragOver={draggable && dragId && !dragging ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverId(id) } : undefined}
+                    onDragLeave={draggable ? () => setOverId((o) => (o === id ? null : o)) : undefined}
+                    onDrop={draggable ? (e) => { e.preventDefault(); reorder(e.dataTransfer.getData('text/plain') || dragId, id); setDragId(null); setOverId(null) } : undefined}
+                  >
+                    {draggable && (
+                      <span
+                        className="grouprow__grip"
+                        draggable
+                        onDragStart={(e) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id) }}
+                        onDragEnd={() => { setDragId(null); setOverId(null) }}
+                        role="button"
+                        tabIndex={-1}
+                        title="Drag to reorder levels"
+                        aria-label={`Reorder ${g.label}`}
+                      >
+                        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden>
+                          <circle cx="6" cy="4" r="1.3" /><circle cx="10" cy="4" r="1.3" />
+                          <circle cx="6" cy="8" r="1.3" /><circle cx="10" cy="8" r="1.3" />
+                          <circle cx="6" cy="12" r="1.3" /><circle cx="10" cy="12" r="1.3" />
+                        </svg>
+                      </span>
+                    )}
                     <button
                       className="grouprow__pick"
                       disabled={!!off}
@@ -358,12 +468,6 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
                         <span className="grouprow__hint">{off || g.hint}</span>
                       </span>
                     </button>
-                    {inChain && live.length > 1 && (
-                      <span className="grouprow__moves">
-                        <button className="grouprow__move" disabled={pos === 0} onClick={() => move(id, -1)} title="Move up a level" aria-label={`Move ${g.label} up`}>↑</button>
-                        <button className="grouprow__move" disabled={pos === live.length - 1} onClick={() => move(id, 1)} title="Move down a level" aria-label={`Move ${g.label} down`}>↓</button>
-                      </span>
-                    )}
                   </span>
                 )
               })
@@ -395,47 +499,52 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
   )
 }
 
-// Base ⇄ Shocks, as a small switch with the option named either side. The knob
+// Cell ⇄ Row, as a small switch with the option named either side. The knob
 // slides between them and picks up the shock orange on the right.
-function ModeSwitch({ value, onChange }) {
+function ModeSwitch({ value, onChange, canShock = true }) {
   const shocks = value === 'shocks'
+  const rowTip = canShock
+    ? 'Row — click rows to chart their combined flow, and add manual shocks'
+    : 'Row — click rows to chart their combined flow'
   return (
     <span className={`modeswitch ${shocks ? 'modeswitch--shocks' : ''}`}>
       <button
         className={`modeswitch__opt ${!shocks ? 'modeswitch__opt--on' : ''}`}
         onClick={() => onChange('base')}
-        title="Base — click a cell to see the underlying data behind it"
+        title="Cell — click a cell to see the underlying data behind it"
       >
-        Base
+        Cell
       </button>
       <button
         className="modeswitch__track"
         role="switch"
         aria-checked={shocks}
-        aria-label="Grid mode: Base or Shocks"
+        aria-label="Grid mode: Cell or Row"
         onClick={() => onChange(shocks ? 'base' : 'shocks')}
-        title={shocks ? 'Switch to Base mode' : 'Switch to Shocks mode'}
+        title={shocks ? 'Switch to Cell mode' : 'Switch to Row mode'}
       >
         <span className="modeswitch__knob" />
       </button>
       <button
         className={`modeswitch__opt ${shocks ? 'modeswitch__opt--on' : ''}`}
         onClick={() => onChange('shocks')}
-        title="Shocks — click a row to isolate it and add manual shocks"
+        title={rowTip}
       >
-        Shocks
+        Row
       </button>
     </span>
   )
 }
 
-function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, values, dashNum, span }) {
+function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, values, dashNum, span, selectable, selectedCount = 0, totalCount = 0, onSelectAll }) {
   // The whole header row toggles the section; the caret and + keep their own
   // handlers, so ignore clicks that land on a button (they'd double-fire).
   const onRowClick = (e) => {
     if (e.target.closest('button')) return
     onToggle()
   }
+  const all = totalCount > 0 && selectedCount === totalCount
+  const some = selectedCount > 0 && !all
   return (
     <tr className={`grid__section grid__section--${tone}`} onClick={onRowClick}>
       <td className="grid__rowhead">
@@ -461,6 +570,21 @@ function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, valu
           {!readOnly && (
             <button className="iconbtn iconbtn--add" title={`Add ${title.toLowerCase()} category`} onClick={onAdd}>+</button>
           )}
+          {/* Row mode: put the whole section on the chart in one go — the quickest
+              route to the operational flow, since the Sweep row sits outside both
+              sections and so is never swept up by it. Right-aligned, with its box
+              last, so it heads the column of row checkboxes beneath it. */}
+          {selectable && totalCount > 0 && (
+            <button
+              className={`selectall ${all ? 'selectall--on' : ''} ${some ? 'selectall--some' : ''}`}
+              onClick={(e) => { e.stopPropagation(); onSelectAll(!all) }}
+              aria-pressed={all}
+              title={all ? `Remove all ${title.toLowerCase()} categories from the chart` : `Add all ${totalCount} ${title.toLowerCase()} categories to the chart`}
+            >
+              {all ? 'All selected' : some ? `${selectedCount} of ${totalCount}` : 'Select all'}
+              <span className="tickbox" aria-hidden>{all ? '✓' : some ? '–' : ''}</span>
+            </button>
+          )}
         </span>
       </td>
       {values.map((v, bi) => (
@@ -472,11 +596,15 @@ function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, valu
   )
 }
 
-function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
+function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, singleFocus, canShock, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
   // Grouped rows (e.g. by currency) are roll-ups, not categories: they have no
   // model behind them, no name to edit and nothing to shock.
   const synthetic = !!row.synthetic
   const shocksMode = gridMode === 'shocks' && !synthetic
+  // A shock lands on one category of one company, so the per-cell shock controls
+  // need the selection narrowed to this row alone — and a grid that can take a
+  // shock at all (not an account/pool cut).
+  const shockable = focused && singleFocus && canShock
   // Shocks mode: clicking anywhere on the row drills into it — except on
   // interactive controls (the name field, cell inputs, and the row buttons).
   const onRowClick = (e) => {
@@ -516,13 +644,20 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
             {readOnly || synthetic ? (
               <span className="catcap__name">{row.name}</span>
             ) : (
-              <input
-                className="catcap__name catcap__name--input"
-                value={row.name}
-                size={Math.max(6, row.name.length)}
-                onChange={(e) => onRowName(section, row.id, e.target.value)}
-                aria-label="Category name"
-              />
+              /* The wrapper carries the value so the field can size to its text.
+                 Sizing by character count instead put the model icon 16–22px
+                 further right on an editable grid than on a read-only one. */
+              <span className="catcap__namefit" data-value={row.name}>
+                <input
+                  className="catcap__name catcap__name--input"
+                  value={row.name}
+                  /* an input's intrinsic width is its `size` (20 by default), which
+                     would set the grid track instead of the mirrored text */
+                  size={1}
+                  onChange={(e) => onRowName(section, row.id, e.target.value)}
+                  aria-label="Category name"
+                />
+              </span>
             )}
             {/* the model half of the capsule is its own button → model panel */}
             {!synthetic && <button
@@ -540,16 +675,16 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
             </button>}
           </span>
           {shocksMode && (
+            /* The row is a selection toggle now, not a drill-in, so it carries the
+               same tickbox as the section's Select all — right-aligned, so the
+               boxes read as one column down the label gutter. */
             <button
               className={`focusbtn ${focused ? 'focusbtn--on' : ''}`}
-              title={focused ? 'Drilled into this category — click to return to balance' : 'Drill into this category'}
+              title={focused ? 'On the chart — click to take it off' : 'Add this category to the chart'}
               aria-pressed={focused}
               onClick={onFocus}
             >
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
-                <circle cx="10.5" cy="10.5" r="6.5" />
-                <line x1="20" y1="20" x2="15.6" y2="15.6" />
-              </svg>
+              <span className="tickbox" aria-hidden>{focused ? '✓' : ''}</span>
             </button>
           )}
         </span>
@@ -557,17 +692,17 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
       {buckets.map((b, bi) => {
         const bStart = b.dayIndices[0]
         const bEnd = b.dayIndices[b.dayIndices.length - 1]
-        const hasShock = focused && shockRanges && shockRanges.some((r) => bStart <= r.end && bEnd >= r.start)
+        const hasShock = shockable && shockRanges && shockRanges.some((r) => bStart <= r.end && bEnd >= r.start)
         // Base mode: read-only cells can be clicked to inspect their underlying data.
         const inspectable = gridMode === 'base' && !editable
         const isActive = !!underlyingCell && underlyingCell.section === section && underlyingCell.rowId === row.id && underlyingCell.bucketKey === b.key
         return (
           <td
             key={b.key}
-            className={`grid__cell ${focused ? 'grid__cell--shockable' : ''} ${inspectable ? 'grid__cell--inspect' : ''} ${isActive ? 'grid__cell--active' : ''}`}
+            className={`grid__cell ${shockable ? 'grid__cell--shockable' : ''} ${inspectable ? 'grid__cell--inspect' : ''} ${isActive ? 'grid__cell--active' : ''}`}
             onClick={inspectable ? () => onCellClick(section, row, b) : undefined}
           >
-            {focused && (
+            {shockable && (
               <button
                 className={`cellshock ${hasShock ? 'cellshock--on' : ''}`}
                 title={hasShock ? 'Shock applied here — open the shocks panel to edit' : `Add a shock in ${b.label}`}

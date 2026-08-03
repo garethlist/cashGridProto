@@ -1,15 +1,21 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, useEffect } from 'react'
 import { longDate, bandFraction } from '../model.js'
 import { useMoney } from '../currency.jsx'
 import ShockIcon from './ShockIcon.jsx'
+import FinderIcon from './FinderIcon.jsx'
 
 // A custom SVG chart of one or more daily balance series (Base, optionally plus
 // one scenario), laid out on the exact same column geometry as the table below
 // so the two read as one connected view. `lines[0]` is the primary (Base).
-export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', markers = true, annotations = [], reserveMarkers = false, onAnnotationClick }) {
+export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef }) {
   const svgRef = useRef(null)
   const [hover, setHover] = useState(null)
   const { compact } = useMoney()
+
+  // A live hover always wins; when the pointer is away we fall back to the
+  // pinned day (set by the KPI "low point finder"), so its tooltip persists.
+  const activeDay = hover != null ? hover : pinnedDay
+  const showPinned = hover == null && pinnedDay != null
 
   // Upper/lower forecast bounds (dummy uncertainty cone) for lines with band on.
   const bands = useMemo(() => {
@@ -41,7 +47,13 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
     }
     let lo = Math.min(...allValues)
     let hi = Math.max(...allValues)
-    if (lo === hi) hi = lo + 1
+    // A series with no real range must not be stretched to fill the plot. The
+    // domain always includes zero, so this only catches a series that IS zero
+    // throughout — a zero-balancing account, whose remaining spread is rounding
+    // residue. Scaled up, that residue draws a convincing moving balance out of
+    // nothing. Give it a nominal domain instead and let the line lie flat on £0.
+    const flat = hi - lo < Math.max(Math.abs(lo), Math.abs(hi), 1) * 1e-6
+    if (flat) { lo = -1; hi = 1 }
     const pad = (hi - lo) * 0.08
     lo -= pad
     hi += pad
@@ -71,11 +83,31 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
     }
 
     const primary = lines[0]?.series ?? []
-    const hasNeg = Math.min(0, ...primary, ...lines.flatMap((l) => l.series)) < 0
-    return { lo, hi, yScale, dayX, ticks, hasNeg }
+    // "Short of cash" means a balance that reads negative, not one that rounds to
+    // zero — otherwise a swept account's -1e-11 residue paints the whole chart as
+    // breached. Half a unit is the display precision, so anything inside it is £0.
+    const hasNeg = Math.min(0, ...primary, ...lines.flatMap((l) => l.series)) < -0.5
+    // Zero sits somewhere on the plot whenever the domain straddles it — which,
+    // since the domain always includes zero, is true unless every value is zero.
+    // We surface the £0 line whenever it's genuinely in range so the "cash floor"
+    // is always readable, not only once a balance has already gone negative.
+    const zeroInRange = lo < 0 && hi > 0
+    return { lo, hi, yScale, dayX, ticks, hasNeg, zeroInRange, flat }
   }, [days, lines, bands, buckets, labelW, colW, plotBottom, plotH])
 
-  const { yScale, dayX, ticks, hasNeg } = geom
+  const { yScale, dayX, ticks, hasNeg, zeroInRange, flat } = geom
+
+  // When the finder pins a day, bring it into view — the low point often sits
+  // off-screen in the horizontally scrolling grid, and a silent highlight there
+  // would go unseen.
+  useEffect(() => {
+    if (pinnedDay == null) return
+    const parent = scrollParentRef?.current
+    if (!parent || dayX[pinnedDay] == null) return
+    const max = parent.scrollWidth - parent.clientWidth
+    const target = Math.max(0, Math.min(max, dayX[pinnedDay] - parent.clientWidth / 2))
+    parent.scrollTo({ left: target, behavior: 'smooth' })
+  }, [pinnedDay, dayX, scrollParentRef])
 
   const toLine = (series) =>
     series.map((v, i) => `${i === 0 ? 'M' : 'L'}${dayX[i].toFixed(2)},${yScale(v).toFixed(2)}`).join(' ')
@@ -171,11 +203,31 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
           />
         ))}
 
+        {/* "short of cash" zone: everything below the £0 line, shaded faint
+            danger. Only drawn once a balance actually dips negative. */}
+        {zeroInRange && hasNeg && (
+          <rect
+            className="chart__short"
+            x={labelW}
+            y={y0}
+            width={contentW - labelW}
+            height={Math.max(0, plotBottom - y0)}
+          />
+        )}
+
         {/* horizontal gridlines + zero line */}
         {ticks.map((t, i) => (
           <line key={i} className="chart__grid" x1={labelW} y1={t.y} x2={contentW} y2={t.y} />
         ))}
-        {hasNeg && <line className="chart__zero" x1={labelW} y1={y0} x2={contentW} y2={y0} />}
+        {zeroInRange && (
+          <line
+            className={`chart__zero ${hasNeg ? 'chart__zero--breached' : ''}`}
+            x1={labelW}
+            y1={y0}
+            x2={contentW}
+            y2={y0}
+          />
+        )}
 
         {/* column separators aligned to table column borders */}
         {buckets.slice(1).map((b) => (
@@ -242,17 +294,32 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
             )
           })}
 
-        {/* hover guide + a dot on each line */}
-        {hover != null && (
+        {/* persistent "found" halo at the pinned low point, so it stays visible
+            even while the pointer roams elsewhere on the chart */}
+        {pinnedDay != null && prominent && dayX[pinnedDay] != null && (
+          <g className="chart__found">
+            <circle className="chart__found-halo" cx={dayX[pinnedDay]} cy={yScale(prominent.series[pinnedDay])} r={11} />
+            <circle className="chart__found-ring" cx={dayX[pinnedDay]} cy={yScale(prominent.series[pinnedDay])} r={6} />
+          </g>
+        )}
+
+        {/* hover guide + a dot on each line — or the pinned low point when idle */}
+        {activeDay != null && (
           <g>
-            <line className="chart__guide" x1={dayX[hover]} y1={plotTop} x2={dayX[hover]} y2={plotBottom} />
+            <line
+              className={`chart__guide ${showPinned ? 'chart__guide--pinned' : ''}`}
+              x1={dayX[activeDay]}
+              y1={plotTop}
+              x2={dayX[activeDay]}
+              y2={plotBottom}
+            />
             {lines.map((ln) => (
               <circle
                 key={`h-${ln.id}`}
-                className="chart__hoverdot"
-                style={{ fill: ln.color }}
-                cx={dayX[hover]}
-                cy={yScale(ln.series[hover])}
+                className={`chart__hoverdot ${showPinned ? 'chart__hoverdot--pinned' : ''}`}
+                style={showPinned ? undefined : { fill: ln.color }}
+                cx={dayX[activeDay]}
+                cy={yScale(ln.series[activeDay])}
                 r={ln.id === lines[0].id ? 4.5 : 3.8}
               />
             ))}
@@ -265,30 +332,59 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
       {/* sticky Y-axis gutter — stays pinned left while columns scroll */}
       <div className="chart__gutter" style={{ width: labelW, height }}>
         <span className="chart__gutter-title">{title}</span>
-        {ticks.map((t, i) => (
-          <span key={i} className="chart__ytick" style={{ top: t.y }}>
-            {compact(t.v)}
+        {/* Standing note about the grid itself, in the gutter's empty upper area —
+            e.g. why a swept account's line is pinned flat at zero. */}
+        {note && (
+          <span className="chart__gutter-note">
+            <span className="chart__gutter-note-label">
+              <span className="chart__gutter-note-dot" aria-hidden />
+              {note.label}
+            </span>
+            {note.detail && <span className="chart__gutter-note-detail">{note.detail}</span>}
           </span>
-        ))}
+        )}
+        {/* A flat-at-zero series has a nominal domain, so its ticks would be five
+            arbitrary subdivisions of nothing — all reading £0. The zero marker
+            below says it once. */}
+        {(flat ? [] : ticks).map((t, i) =>
+          // Suppress any regular tick that would collide with the dedicated £0
+          // label — the zero marker takes precedence over the padded scale tick.
+          // ~20px clears a label's height; regular ticks sit far further apart.
+          zeroInRange && Math.abs(t.y - y0) < 20 ? null : (
+            <span key={i} className="chart__ytick" style={{ top: t.y }}>
+              {compact(t.v)}
+            </span>
+          )
+        )}
+        {zeroInRange && (
+          <span
+            className={`chart__ytick chart__ytick--zero ${hasNeg ? 'chart__ytick--breached' : ''}`}
+            style={{ top: y0 }}
+          >
+            {compact(0)}
+          </span>
+        )}
       </div>
 
-      {hover != null && (
+      {activeDay != null && (
         <HoverTip
-          x={dayX[hover]}
+          x={dayX[activeDay]}
           contentW={contentW}
           labelW={labelW}
-          iso={days[hover]}
+          iso={days[activeDay]}
           lines={lines.map((ln) => ({
             id: ln.id,
             name: ln.name,
             code: ln.code,
             model: ln.model,
             color: ln.color,
-            value: ln.series[hover],
-            band: ln.band ? Math.abs(ln.series[hover]) * bandFraction(hover, days.length) : null,
+            value: ln.series[activeDay],
+            band: ln.band ? Math.abs(ln.series[activeDay]) * bandFraction(activeDay, days.length) : null,
           }))}
-          net={dailyNet[hover]}
-          bucket={bucketOf(hover)}
+          net={dailyNet[activeDay]}
+          bucket={bucketOf(activeDay)}
+          found={showPinned}
+          foundLabel={pinnedLabel}
         />
       )}
       </div>
@@ -299,7 +395,7 @@ export default function AlignedChart({ days, lines, dailyNet, buckets, labelW, c
 const tagClass = (category) =>
   category === 'Statistical' ? 'tag--stat' : category === 'ML/AI' ? 'tag--ml' : 'tag--rnd'
 
-function HoverTip({ x, contentW, labelW, iso, lines, net, bucket }) {
+function HoverTip({ x, contentW, labelW, iso, lines, net, bucket, found = false, foundLabel }) {
   const { money0: gbp0 } = useMoney()
   const W = 268
   let left = x + 14
@@ -307,7 +403,13 @@ function HoverTip({ x, contentW, labelW, iso, lines, net, bucket }) {
   if (left < labelW + 4) left = labelW + 4
   const baseVal = lines[0]?.value ?? 0
   return (
-    <div className="chart__tip" style={{ left }}>
+    <div className={`chart__tip ${found ? 'chart__tip--found' : ''}`} style={{ left }}>
+      {found && (
+        <div className="chart__tip-found">
+          <FinderIcon size={12} />
+          <span>{foundLabel || 'Lowest point'}</span>
+        </div>
+      )}
       <div className="chart__tip-date">{longDate(iso)}</div>
       {lines.map((ln, i) => {
         const impact = ln.value - baseVal

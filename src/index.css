@@ -214,12 +214,24 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  transition: padding-right 0.2s ease;
+  transition: padding-right 0.2s ease, padding-left 0.2s ease;
 }
 /* Base-mode detail panel is non-modal: reserve space so the grid reflows beside
-   it and every cell stays clickable ("browse" cells while the panel is open). */
-.app--docked { padding-right: calc(var(--pad) + 472px); }
+   it and every cell stays clickable ("browse" cells while the panel is open).
+   The reserve is exactly the panel's width, so the full-bleed table's frame
+   lines butt straight onto the panel's border rather than floating clear of it. */
+.app--docked { padding-right: calc(var(--pad) + 460px); }
 @media (max-width: 900px) { .app--docked { padding-right: var(--pad); } }
+/* Opening-balance panel does the same from the left, so the two can sit open
+   together with the chart and grid framed between them. */
+.app--docked-left { padding-left: calc(var(--pad) + 460px); }
+@media (max-width: 900px) { .app--docked-left { padding-left: var(--pad); } }
+/* Below that breakpoint there's no room to reserve, so the panels overlay the
+   grid rather than framing it — and there they do need to lift off the surface. */
+@media (max-width: 900px) {
+  .balpanel { box-shadow: 8px 0 32px rgba(0, 0, 0, 0.18); }
+  .underpanel { box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18); }
+}
 
 /* --- view tabs ------------------------------------------------------------*/
 .tabbar {
@@ -325,6 +337,48 @@ body {
   font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
+  color: var(--muted);
+}
+.entpick__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+}
+.entpick__search:focus-within { border-color: var(--brand); background: var(--panel); }
+.entpick__searchicon { flex: none; color: var(--muted); }
+.entpick__search:focus-within .entpick__searchicon { color: var(--brand); }
+.entpick__searchfield {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--fs-small);
+  font-family: var(--font-sans);
+}
+.entpick__searchfield:focus { outline: none; }
+.entpick__searchfield::placeholder { color: var(--muted); }
+.entpick__searchclear {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 2px;
+}
+.entpick__searchclear:hover { color: var(--ink); }
+.entpick__empty {
+  padding: 16px 10px;
+  text-align: center;
+  font-size: var(--fs-small);
   color: var(--muted);
 }
 .entrow {
@@ -581,17 +635,49 @@ body {
   font-size: var(--fs-small);
   font-weight: var(--fw-medium);
   letter-spacing: var(--tracking-tighter);
+  /* The span inherits the capsule's line-height but the field would take the UA's
+     `normal`, laying its glyphs out on a different rhythm inside an identically
+     sized box — a 1px step in the name when moving between a read-only grid and
+     an editable one. Both take the capsule's. */
+  line-height: inherit;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* An <input> cannot size to its own content, so the wrapper mirrors the value in
+   a hidden pseudo-element and the two share a single grid cell: the field ends up
+   exactly as wide as the text a read-only span would draw. Without this the field
+   was sized by character count, which in a proportional face left the model icon
+   in a different place on an editable grid than on a read-only one.
+   The negative margin cancels the field's own padding and border, so its text
+   sits on the same baseline and start as the span's. */
+.catcap__namefit {
+  display: inline-grid;
+  min-width: 0;
+  /* cancels the field's own padding + border on all four sides, so an editable
+     capsule is the same size as a read-only one and the rows stay level */
+  margin: -2px -4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-tighter);
+}
+.catcap__namefit::after {
+  content: attr(data-value);
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: pre;
+  min-width: 1ch;
+  padding: 1px 3px;
+  border: 1px solid transparent;
+}
+.catcap__namefit > .catcap__name--input { grid-area: 1 / 1; width: 100%; min-width: 0; }
 .catcap__name--input {
   border: 1px solid transparent;
   background: transparent;
   border-radius: var(--r-sm);
   padding: 1px 3px;
-  margin: -1px -3px;
 }
 .catcap__name--input:focus { outline: none; border-color: var(--accent); background: var(--panel-2); }
 
@@ -1021,6 +1107,41 @@ body {
 .metric--danger .metric__value { color: var(--neg); }
 .metric--ok .metric__value { color: var(--pos); }
 
+/* KPI header row: label + the optional "finder" affordance */
+/* Holds the finder button's height whether or not the button is there — it drops
+   out while a category selection is on the chart, and without this the cards
+   (and so the chart below them) shift up by a few pixels as it goes. */
+.metric__head { display: flex; align-items: center; gap: 7px; min-height: 20px; }
+.metric__find {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.metric__find:hover {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+.metric__find:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.metric__find--on {
+  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 24%, transparent);
+}
+.metric__find--on:hover { color: #fff; background: var(--brand); }
+/* tie the pinned card to the pink finder journey */
+.metric--finding { border-color: color-mix(in srgb, var(--brand) 45%, transparent); }
+
 /* KPI impact bridge, right-aligned: shock + scenario, then a combined total */
 .metric__impact {
   display: flex;
@@ -1106,7 +1227,23 @@ body {
   background: transparent;
 }
 .splitter:focus-visible { outline: none; }
-/* the 1px divider itself is drawn by the cells; this is the hover/active cue */
+/* The divider runs the full height of the section, drawn once here rather than
+   pieced together by everything it passes. The chart's gutter, the shock lane and
+   each table row still draw their own 1px against their own backgrounds, but only
+   this reaches the section's top and bottom rules — those pieces left a break
+   above the chart (the scroll container's top padding) and another where the
+   chart hands over to the table. The splitter is centred on the divider by its
+   negative margin, so 4px in from its own left edge lands exactly on it. */
+.splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--border);
+}
+/* the grip is the hover/active cue on top of that line */
 .splitter__grip {
   width: 3px;
   height: 100%;
@@ -1225,13 +1362,109 @@ body {
 }
 
 /* --- focus (isolate a category flow) --------------------------------------*/
-.focusbar { align-items: center; flex-wrap: wrap; }
-.scenariobar__label--sub { color: var(--muted); font-weight: 600; margin-left: 4px; }
+/* Rides the header's title line. Everything here is sized to fit inside the
+   height the h1 already sets, so putting a selection on the chart never moves
+   the chart itself. It stays on one line and clips rather than wrapping. */
+.focushead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* basis 0, not auto: with `auto` the header sizes this block by its content and
+     wraps it onto a line of its own rather than shrinking it — which is the exact
+     jump this move was meant to remove. At 0 it always shares the title's line and
+     absorbs whatever space is left, clipping the names if there isn't enough. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+.focushead__label {
+  flex: none;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-weight: var(--fw-semibold);
+  color: var(--muted);
+}
+.focushead .focusbar__series { min-width: 0; overflow: hidden; }
+.focushead .focusbar__chips { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+/* in the header the chips give up width before anything is clipped away */
+.focushead .focuschip { min-width: 0; overflow: hidden; }
+.focushead .focuschip--more { flex: none; }
+/* Chips by default; the count is the narrow-window stand-in for them. Below the
+   swap the chips would ellipsise down to bare dots, which says nothing. */
+.focushead__count { display: none; flex: none; font-weight: var(--fw-semibold); font-size: 13px; }
+@media (max-width: 1280px) {
+  .focushead .focusbar__chips { display: none; }
+  .focushead__count { display: inline-flex; }
+}
+/* the way out never clips — the names give way first */
+.focushead .btn { flex: none; margin-left: auto; }
+/* Degrade by dropping the least load-bearing parts first: the model's full name
+   (it's on the row's own capsule), then the caption, then the category pill. The
+   category name and the way out survive at every width. */
+.focushead .focusbar__name { white-space: nowrap; }
+.focushead .tag { flex: none; }
+@media (max-width: 1500px) { .focushead .focusbar__model { display: none; } }
+@media (max-width: 1280px) { .focushead__label { display: none; } }
+@media (max-width: 1100px) { .focushead .tag { display: none; } }
+/* the tail of a selection too long to name — a count, not a control */
+.focuschip--more { cursor: default; color: var(--muted); }
+.focuschip--more:hover { border-color: var(--border); color: var(--muted); background: var(--panel); }
 .emphasis { display: inline-flex; align-items: center; gap: 7px; }
 .emphasis__label { font-size: 12px; font-weight: var(--fw-semibold); color: var(--muted); }
-.focusbar__series { display: inline-flex; align-items: center; gap: 8px; }
+.focusbar__series { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .focusbar__name { font-weight: var(--fw-semibold); font-size: 13px; }
 .focusbar__model { font-size: 11.5px; color: var(--muted-strong); font-weight: 600; }
+
+/* A multi-category selection has no single model behind it, so the bar lists the
+   set instead. Each chip removes its own category. */
+.focusbar__chips { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.focuschip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); color: var(--ink);
+  font: inherit; font-size: 11.5px; font-weight: 600;
+  padding: 3px 8px 3px 6px; cursor: pointer;
+  /* never wrap: squeezed into the header a two-line chip would double its height
+     and take the whole title row — and the chart below it — with it */
+  white-space: nowrap;
+  transition: border-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.focuschip__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.focuschip:hover { border-color: var(--neg); color: var(--neg); background: color-mix(in srgb, var(--neg) 10%, transparent); }
+.focuschip__dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted-strong); }
+/* the sign the chip carries into the net: inflows add, outflows subtract */
+.focuschip--out .focuschip__dot { box-shadow: inset 0 0 0 3px var(--panel); }
+.focuschip__x { font-size: 13px; line-height: 1; color: var(--muted); }
+.focuschip:hover .focuschip__x { color: var(--neg); }
+
+/* Row mode's selection controls: one tickbox shared by the whole-section select
+   in the Inflow / Outflow headers and the per-row toggle beneath it. Both sit at
+   the right edge of the label column, so the boxes line up as a single column. */
+.tickbox {
+  width: 13px; height: 13px; flex: none;
+  border: 1px solid currentColor; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; line-height: 1;
+  transition: background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+
+.selectall {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto; /* right-aligned in the section's label cell */
+  border: 1px solid transparent;
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 10px; font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: var(--tracking-wide);
+  /* padding + border put the tickbox on the same inset as the row toggles below */
+  padding: 3px 5px; border-radius: var(--r-pill); cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.selectall:hover { color: var(--accent); border-color: var(--border); background: var(--panel-2); }
+.selectall--on, .selectall--some { color: var(--accent); }
+.selectall--on .tickbox, .selectall--some .tickbox { background: var(--accent); border-color: var(--accent); color: var(--panel); }
 
 .grid--mode-shocks .grid__row--item { cursor: pointer; }
 /* Base mode: read-only cells can be clicked to inspect their underlying data */
@@ -1240,22 +1473,26 @@ body {
 .grid__cell--active { background: color-mix(in srgb, var(--accent) 14%, transparent) !important; box-shadow: inset 0 0 0 1px var(--accent); }
 .focusbtn {
   flex: none;
+  margin-left: auto; /* right-aligned, under the section's Select all */
   border: none;
   background: transparent;
-  color: var(--muted-strong);
-  width: 24px;
+  color: var(--muted);
+  min-width: 24px;
   height: 24px;
+  padding: 0 6px;
   border-radius: 6px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   cursor: pointer;
-  opacity: 0.6;
+  /* legible at rest so the row reads as selectable, without shouting */
+  opacity: 0.55;
   transition: color 0.12s ease, opacity 0.12s ease;
 }
 .grid__row--item:hover .focusbtn { opacity: 1; color: var(--accent); }
-.focusbtn:hover { color: var(--accent); }
+.focusbtn:hover { opacity: 1; color: var(--accent); }
 .focusbtn--on, .grid__row--item:hover .focusbtn--on { opacity: 1; color: var(--accent); }
+.focusbtn--on .tickbox { background: var(--accent); border-color: var(--accent); color: var(--panel); }
 
 .grid__rowtag { flex: none; display: inline-flex; }
 .grid__rowtag .tag { font-size: 9px; padding: 1px 5px; }
@@ -1438,7 +1675,12 @@ body {
 .chart__band { fill: transparent; }
 .chart__band--alt { fill: color-mix(in srgb, var(--muted) 3%, transparent); }
 .chart__grid { stroke: var(--grid); stroke-width: 1; }
-.chart__zero { stroke: var(--neg); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.65; }
+/* £0 "cash floor" reference: muted while we stay above it, danger once a
+   balance dips below (short of cash) */
+.chart__zero { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.5; }
+.chart__zero--breached { stroke: var(--neg); stroke-width: 1.25; opacity: 0.8; }
+/* the sub-zero "short of cash" zone */
+.chart__short { fill: color-mix(in srgb, var(--neg) 9%, transparent); stroke: none; }
 .chart__sep { stroke: var(--border); stroke-width: 1; opacity: 0.55; }
 .chart__axisline { stroke: var(--border); stroke-width: 1; }
 .chart__area { fill: url(#balFill); stroke: none; }
@@ -1451,6 +1693,46 @@ body {
 .chart__marker { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
 .chart__guide { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
 .chart__hoverdot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+
+/* --- low point finder ---------------------------------------------------- */
+/* pinned guide + dot switch to the brand pink so the highlight matches the
+   finder button that opened it */
+.chart__guide--pinned { stroke: var(--brand); stroke-dasharray: 4 3; opacity: 0.75; }
+.chart__hoverdot--pinned { fill: var(--brand); stroke: var(--panel); stroke-width: 2; }
+/* persistent target ring sitting on the low point */
+.chart__found { pointer-events: none; }
+.chart__found-halo {
+  fill: color-mix(in srgb, var(--brand) 22%, transparent);
+  stroke: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: found-pulse 1.8s ease-in-out infinite;
+}
+.chart__found-ring { fill: none; stroke: var(--brand); stroke-width: 1.5; opacity: 0.85; }
+@keyframes found-pulse {
+  0%, 100% { opacity: 0.9; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(1.35); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart__found-halo { animation: none; }
+}
+/* tooltip, when opened via the finder: pink frame + a header badge that
+   echoes the KPI's finder icon, so the journey reads end to end */
+.chart__tip--found { border-color: color-mix(in srgb, var(--brand) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent), var(--shadow); }
+.chart__tip-found {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  color: var(--brand);
+  font-size: 10px;
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
 
 /* sticky Y-axis gutter, pinned left as columns scroll */
 .chart__gutter {
@@ -1471,6 +1753,30 @@ body {
   letter-spacing: var(--tracking-wide);
   color: var(--muted);
 }
+/* Standing note in the gutter's empty upper area, under the chart title. Sits
+   left of the y-ticks (which hang off the right edge) and is capped so it can't
+   run into them. */
+.chart__gutter-note {
+  position: absolute;
+  top: 24px;
+  left: var(--pad);
+  max-width: calc(100% - var(--pad) - 52px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chart__gutter-note-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+  color: var(--muted-strong);
+}
+/* the same cyan the Sweep row carries in the table below */
+.chart__gutter-note-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #06b6d4; }
+.chart__gutter-note-detail { font-size: 10.5px; line-height: 1.35; color: var(--muted); }
+
 .chart__ytick {
   position: absolute;
   right: 12px;
@@ -1479,6 +1785,9 @@ body {
   color: var(--muted-strong);
   font-variant-numeric: tabular-nums;
 }
+/* the dedicated £0 marker on the gutter, tracking the zero line's state */
+.chart__ytick--zero { font-weight: var(--fw-semibold); color: var(--muted-strong); }
+.chart__ytick--breached { color: var(--neg); }
 
 .chart__tip {
   position: absolute;
@@ -1621,6 +1930,11 @@ body {
 .grid--focusmode .grid__row,
 .grid--focusmode .grid__section { opacity: 0.3; }
 .grid--focusmode .grid__row--focused { opacity: 1; }
+/* The section headers carry the whole-section select, so in Row mode they stay
+   legible while rows are isolated — only their figures dim. (Opacity on the row
+   would cap the button's too, so it's applied to the cells instead.) */
+.grid--mode-shocks.grid--focusmode .grid__section { opacity: 1; }
+.grid--mode-shocks.grid--focusmode .grid__section .grid__cell { opacity: 0.3; }
 
 .grid__rowname {
   border: 1px solid transparent;
@@ -1745,6 +2059,7 @@ body {
   padding-bottom: 9px;
 }
 .grid__dot--net { background: var(--muted-strong); }
+.grid__dot--sweep { background: #06b6d4; }
 
 /* --- balance level --------------------------------------------------------*/
 .grid__row--bal .grid__rowhead,
@@ -1768,6 +2083,34 @@ body {
   font-weight: var(--fw-semibold);
 }
 .grid__row--bal .cell.is-neg { color: var(--neg); }
+
+/* Each end of the horizon carries a balance cell that opens the drawer listing
+   the bank accounts behind it — the opening row's first column, the closing row's
+   last. The columns between just carry the balance along, so they stay plain
+   figures. */
+.balcell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.balcell__chev {
+  flex: none;
+  color: var(--muted);
+  /* points left, toward the side the drawer opens from */
+  transform: rotate(180deg);
+  transition: transform var(--dur-base) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.grid__cell--balcell:hover .balcell { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.grid__cell--balcell:hover .balcell__chev { color: var(--accent); }
+.grid__cell--active .balcell__chev { transform: rotate(0deg); color: var(--accent); }
+.balcell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* --- buttons --------------------------------------------------------------*/
 .btn {
@@ -2235,7 +2578,7 @@ body {
 .grouppick__modes .seg { width: 100%; }
 .grouppick__modes .seg__btn { flex: 1; justify-content: center; padding: 0 8px; }
 
-/* drill-down rows: a level badge, the option, and reorder arrows */
+/* drill-down rows: a drag handle, a level badge, and the option */
 .grouprow--single { cursor: pointer; }
 /* after --single, or it would win on specificity and re-assert the pointer */
 .grouprow--single.grouprow--soon { cursor: not-allowed; }
@@ -2267,19 +2610,24 @@ body {
   color: #fff;
 }
 .grouprow__level--off { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
-.grouprow__moves { display: inline-flex; flex-direction: column; gap: 1px; flex: none; }
-.grouprow__move {
-  border: none;
-  background: transparent;
+/* drag handle — grab the level and drop it into a new slot */
+.grouprow__grip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--muted);
-  cursor: pointer;
-  line-height: 1;
-  font-size: 11px;
-  padding: 1px 3px;
+  cursor: grab;
+  padding: 2px 1px;
+  margin-left: -2px;
   border-radius: var(--r-xs);
+  transition: color var(--dur-fast) var(--ease-standard);
 }
-.grouprow__move:hover:not(:disabled) { color: var(--ink); background: var(--panel); }
-.grouprow__move:disabled { opacity: 0.3; cursor: not-allowed; }
+.grouprow__grip:hover { color: var(--ink); }
+.grouprow__grip:active { cursor: grabbing; }
+.grouprow--dragging { opacity: 0.45; }
+/* the level being dropped onto gets a top rule marking the insertion point */
+.grouprow--drop { box-shadow: inset 0 2px 0 var(--accent); }
 .grouppick__summary {
   margin: 3px 4px 1px;
   padding: 7px 10px;
@@ -2289,13 +2637,123 @@ body {
   color: var(--muted-strong);
 }
 
+/* ---- opening-balance drawer (left dock) ----------------------------------
+   Mirrors the underlying-data drawer, but hinged on the other side: the app
+   column reserves space (.app--docked-left) so the chart and grid narrow beside
+   it rather than being covered, and the two can sit open together. */
+.balpanel {
+  position: fixed; top: 0; left: var(--rail-width); height: 100%;
+  width: 460px; max-width: calc(96vw - var(--rail-width));
+  background: var(--panel);
+  /* Flat, not floating: the single hairline is the same weight and colour as the
+     table's own frame lines, which butt onto it — so the panel reads as another
+     pane of the grid's frame rather than a sheet hovering over it. */
+  border-right: 1px solid var(--border);
+  /* clears the black rail as well as its own width, so nothing peeks out */
+  transform: translateX(calc(-100% - var(--rail-width)));
+  transition: transform 0.2s ease;
+  z-index: 51;
+  display: flex; flex-direction: column;
+}
+.balpanel--open { transform: translateX(0); }
+/* trail back to the grid a drill-through started from */
+.balpanel__crumb {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; text-align: left;
+  border: none; border-bottom: 1px solid var(--border);
+  background: var(--panel-2); color: var(--muted);
+  padding: 8px 18px; font: inherit; cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.balpanel__crumb:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel-2)); }
+.balpanel__crumb-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.balpanel__crumb-name { font-size: 12px; font-weight: var(--fw-semibold); color: var(--ink); }
+.balpanel__crumb:hover .balpanel__crumb-name { color: var(--accent); }
+.balpanel__head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 15px 18px 13px; border-bottom: 1px solid var(--border);
+}
+.balpanel__titles { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.balpanel__title { display: inline-flex; align-items: center; gap: 9px; font-weight: var(--fw-semibold); font-size: 15px; }
+/* Actual vs forecast — the panel's most important claim, so it reads as a status
+   and not decoration: banked money is stated flat, forecast money is outlined. */
+.balstatus {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+}
+.balstatus--actual { background: color-mix(in srgb, var(--accent) 16%, transparent); color: color-mix(in srgb, var(--accent) 72%, var(--ink)); }
+.balstatus--forecast { border-color: color-mix(in srgb, var(--brand) 45%, transparent); color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.balpanel__sub { font-size: 12px; color: var(--muted); font-weight: 600; }
+.balpanel__total {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 18px; border-bottom: 1px solid var(--border); background: var(--panel-2);
+}
+.balpanel__total-label { font-size: var(--fs-micro); font-weight: var(--fw-regular); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
+.balpanel__total-val { font-size: 16px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.balpanel__total-val.is-neg { color: var(--neg); }
+.balpanel__body { padding: 4px 12px 18px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
+.balpanel__empty { color: var(--muted); font-size: 13px; padding: 12px; }
+.balpanel__foot {
+  padding: 10px 18px 14px; border-top: 1px solid var(--border);
+  font-size: 11.5px; line-height: 1.45; color: var(--muted);
+}
+
+/* company band — only drawn when the grid spans more than one */
+.balco__head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 8px 6px;
+  font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide);
+  color: var(--muted);
+}
+.balco__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.balco__name { font-weight: var(--fw-semibold); color: var(--muted-strong); }
+.balco__ccy { font-weight: var(--fw-regular); }
+.balco__amt { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); color: var(--muted-strong); letter-spacing: 0; text-transform: none; }
+
+.balacct {
+  position: relative; display: block; width: 100%; text-align: left;
+  border: none; border-bottom: 1px solid var(--border); background: transparent; color: inherit;
+  padding: 0; font: inherit; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.balacct:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.balacct--on { background: color-mix(in srgb, var(--accent) 11%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+/* an account holding none of the opening still carries the grid's flows, so it
+   stays listed — just quieter */
+.balacct--zero { opacity: 0.55; }
+/* the catch-all for rows with no account behind them — there to make the figures
+   add up, not a grid you can open */
+.balacct--inert { cursor: default; }
+.balacct--inert:hover { background: transparent; }
+.balacct__body { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 9px 8px; }
+.balacct__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.balacct__name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.balacct__no { margin-left: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.balacct__meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); min-width: 0; }
+.balacct__bank { white-space: nowrap; }
+.balacct__ccy { font-weight: var(--fw-semibold); color: var(--muted-strong); }
+.balacct__pool { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.balacct__pool--none { font-style: italic; opacity: 0.75; }
+.balacct__figs { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.balacct__amt { font-size: 13px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.balacct__amt.is-neg { color: var(--neg); }
+.balacct__sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.balacct__sub.is-neg { color: color-mix(in srgb, var(--neg) 70%, var(--muted)); }
+.balacct__bar { position: absolute; left: 0; bottom: 0; height: 2px; opacity: 0.6; }
+
 /* ---- underlying detail drawer (Base mode) -------------------------------- */
 .underpanel {
   position: fixed; top: 0; right: 0; height: 100%;
   width: 460px; max-width: 96vw;
   background: var(--panel);
+  /* flat frame, matching the balance panel — see .balpanel */
   border-left: 1px solid var(--border);
-  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18);
   transform: translateX(100%);
   transition: transform 0.2s ease;
   z-index: 51;
