@@ -1,0 +1,952 @@
+{
+  "sheets": [
+    {
+      "name": "Reference",
+      "family": "Setup",
+      "columns": [
+        {
+          "label": "Group",
+          "type": "text"
+        },
+        {
+          "label": "Item",
+          "type": "text"
+        },
+        {
+          "label": "Value",
+          "type": "text"
+        },
+        {
+          "label": "Detail",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Entities",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Id",
+          "type": "text"
+        },
+        {
+          "label": "Tab label",
+          "type": "text"
+        },
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Locale",
+          "type": "text"
+        },
+        {
+          "label": "FX (GBP → local)",
+          "type": "num"
+        },
+        {
+          "label": "Size",
+          "type": "num"
+        },
+        {
+          "label": "Scale (fx x size)",
+          "type": "num"
+        },
+        {
+          "label": "Seed",
+          "type": "text"
+        },
+        {
+          "label": "Accounts",
+          "type": "int"
+        },
+        {
+          "label": "Opening balance",
+          "type": "money"
+        },
+        {
+          "label": "Closing balance",
+          "type": "money"
+        },
+        {
+          "label": "Trading profile",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Seed profiles",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Knob",
+          "type": "text"
+        },
+        {
+          "label": "Value used",
+          "type": "num"
+        },
+        {
+          "label": "Source",
+          "type": "text"
+        },
+        {
+          "label": "What it drives",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "One-off items",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Lands on",
+          "type": "text"
+        },
+        {
+          "label": "Section",
+          "type": "text"
+        },
+        {
+          "label": "Amount (pre-scale)",
+          "type": "money"
+        },
+        {
+          "label": "Amount in grid",
+          "type": "money"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "What it represents",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Tax payments",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Instalment",
+          "type": "text"
+        },
+        {
+          "label": "Amount (pre-scale)",
+          "type": "money"
+        },
+        {
+          "label": "Amount in grid",
+          "type": "money"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Bank accounts",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Id",
+          "type": "text"
+        },
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Account",
+          "type": "text"
+        },
+        {
+          "label": "Number",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Role",
+          "type": "text"
+        },
+        {
+          "label": "Bank",
+          "type": "text"
+        },
+        {
+          "label": "Cash pool",
+          "type": "text"
+        },
+        {
+          "label": "Open share",
+          "type": "int"
+        },
+        {
+          "label": "Opening",
+          "type": "money"
+        },
+        {
+          "label": "Forecast movement",
+          "type": "money"
+        },
+        {
+          "label": "Closing",
+          "type": "money"
+        },
+        {
+          "label": "Note",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Cash pools",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Id",
+          "type": "text"
+        },
+        {
+          "label": "Pool",
+          "type": "text"
+        },
+        {
+          "label": "Type",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Accounts",
+          "type": "int"
+        },
+        {
+          "label": "Companies",
+          "type": "text"
+        },
+        {
+          "label": "Member accounts",
+          "type": "text"
+        },
+        {
+          "label": "Has a grid",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "Grid views",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Tab id",
+          "type": "text"
+        },
+        {
+          "label": "Kind",
+          "type": "text"
+        },
+        {
+          "label": "Title",
+          "type": "text"
+        },
+        {
+          "label": "Subtitle",
+          "type": "text"
+        },
+        {
+          "label": "Shown in",
+          "type": "text"
+        },
+        {
+          "label": "Entities",
+          "type": "text"
+        },
+        {
+          "label": "Accounts in scope",
+          "type": "int"
+        },
+        {
+          "label": "Opening",
+          "type": "money"
+        },
+        {
+          "label": "Net over horizon",
+          "type": "money"
+        },
+        {
+          "label": "Closing",
+          "type": "money"
+        },
+        {
+          "label": "Lowest cash point",
+          "type": "money"
+        },
+        {
+          "label": "Lowest on",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "name": "Source types",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Source type",
+          "type": "text"
+        },
+        {
+          "label": "In the data",
+          "type": "bool"
+        },
+        {
+          "label": "Note",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Payment terms",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Terms (days)",
+          "type": "int"
+        },
+        {
+          "label": "Share of invoices",
+          "type": "pct"
+        },
+        {
+          "label": "Note",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Invoice survival",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Day index",
+          "type": "int"
+        },
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Weeks out",
+          "type": "num"
+        },
+        {
+          "label": "AR surviving",
+          "type": "pct"
+        },
+        {
+          "label": "AP surviving",
+          "type": "pct"
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "family": "Reference data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Section",
+          "type": "text"
+        },
+        {
+          "label": "Code",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Colour",
+          "type": "text"
+        },
+        {
+          "label": "Modelled",
+          "type": "bool"
+        },
+        {
+          "label": "Model",
+          "type": "text"
+        },
+        {
+          "label": "Model class",
+          "type": "text"
+        },
+        {
+          "label": "Source type",
+          "type": "text"
+        },
+        {
+          "label": "Bank account",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Total over horizon",
+          "type": "money"
+        },
+        {
+          "label": "Days with a value",
+          "type": "int"
+        },
+        {
+          "label": "Largest single day",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Daily cashflows",
+      "family": "Forecast data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Day",
+          "type": "text"
+        },
+        {
+          "label": "Section",
+          "type": "text"
+        },
+        {
+          "label": "Code",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Source type",
+          "type": "text"
+        },
+        {
+          "label": "Bank account",
+          "type": "text"
+        },
+        {
+          "label": "Amount",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Daily balance",
+      "family": "Forecast data",
+      "columns": [
+        {
+          "label": "Tab id",
+          "type": "text"
+        },
+        {
+          "label": "Grid",
+          "type": "text"
+        },
+        {
+          "label": "Kind",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Day",
+          "type": "text"
+        },
+        {
+          "label": "Daily net",
+          "type": "money"
+        },
+        {
+          "label": "Daily closing",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Bucket balances",
+      "family": "Forecast data",
+      "columns": [
+        {
+          "label": "Tab id",
+          "type": "text"
+        },
+        {
+          "label": "Grid",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Granularity",
+          "type": "text"
+        },
+        {
+          "label": "Bucket",
+          "type": "text"
+        },
+        {
+          "label": "Starts",
+          "type": "date"
+        },
+        {
+          "label": "Ends",
+          "type": "date"
+        },
+        {
+          "label": "Days",
+          "type": "int"
+        },
+        {
+          "label": "Total inflows",
+          "type": "money"
+        },
+        {
+          "label": "Total outflows",
+          "type": "money"
+        },
+        {
+          "label": "Net movement",
+          "type": "money"
+        },
+        {
+          "label": "Sweep",
+          "type": "money"
+        },
+        {
+          "label": "Opening",
+          "type": "money"
+        },
+        {
+          "label": "Closing",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Monthly by category",
+      "family": "Forecast data",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Month",
+          "type": "text"
+        },
+        {
+          "label": "Month key",
+          "type": "text"
+        },
+        {
+          "label": "Section",
+          "type": "text"
+        },
+        {
+          "label": "Code",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Source type",
+          "type": "text"
+        },
+        {
+          "label": "Bank account",
+          "type": "text"
+        },
+        {
+          "label": "Amount",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "GROUP by currency",
+      "family": "Forecast data",
+      "columns": [
+        {
+          "label": "Shown in",
+          "type": "text"
+        },
+        {
+          "label": "Rate (GBP →)",
+          "type": "num"
+        },
+        {
+          "label": "Month",
+          "type": "text"
+        },
+        {
+          "label": "Total inflows",
+          "type": "money"
+        },
+        {
+          "label": "Total outflows",
+          "type": "money"
+        },
+        {
+          "label": "Net movement",
+          "type": "money"
+        },
+        {
+          "label": "Sweep",
+          "type": "money"
+        },
+        {
+          "label": "Opening",
+          "type": "money"
+        },
+        {
+          "label": "Closing",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Models",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Section",
+          "type": "text"
+        },
+        {
+          "label": "Code",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Modelled",
+          "type": "text"
+        },
+        {
+          "label": "Model",
+          "type": "text"
+        },
+        {
+          "label": "Model class",
+          "type": "text"
+        },
+        {
+          "label": "Owner",
+          "type": "text"
+        },
+        {
+          "label": "Retrain",
+          "type": "text"
+        },
+        {
+          "label": "Trained on",
+          "type": "text"
+        },
+        {
+          "label": "MAPE",
+          "type": "text"
+        },
+        {
+          "label": "Bias",
+          "type": "text"
+        },
+        {
+          "label": "Coverage",
+          "type": "text"
+        },
+        {
+          "label": "Drivers",
+          "type": "text"
+        },
+        {
+          "label": "Description",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Invoice detail",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Party type",
+          "type": "text"
+        },
+        {
+          "label": "Month",
+          "type": "text"
+        },
+        {
+          "label": "Counterparty",
+          "type": "text"
+        },
+        {
+          "label": "Counterparty total",
+          "type": "money"
+        },
+        {
+          "label": "Share of cell",
+          "type": "pct"
+        },
+        {
+          "label": "Invoice",
+          "type": "text"
+        },
+        {
+          "label": "Due",
+          "type": "date"
+        },
+        {
+          "label": "Status",
+          "type": "text"
+        },
+        {
+          "label": "Invoice amount",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Invoice tail (Other)",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Company",
+          "type": "text"
+        },
+        {
+          "label": "Currency",
+          "type": "text"
+        },
+        {
+          "label": "Category",
+          "type": "text"
+        },
+        {
+          "label": "Month",
+          "type": "text"
+        },
+        {
+          "label": "Counterparties",
+          "type": "int"
+        },
+        {
+          "label": "Other amount",
+          "type": "money"
+        },
+        {
+          "label": "Cell total",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Scenarios",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Id",
+          "type": "text"
+        },
+        {
+          "label": "Code",
+          "type": "text"
+        },
+        {
+          "label": "Name",
+          "type": "text"
+        },
+        {
+          "label": "Colour token",
+          "type": "text"
+        },
+        {
+          "label": "Description",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Scenario balances",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Date",
+          "type": "date"
+        },
+        {
+          "label": "Day",
+          "type": "text"
+        },
+        {
+          "label": "BASE — Base (table)",
+          "type": "money"
+        },
+        {
+          "label": "UP10 — Uplift +10% from M3",
+          "type": "money"
+        },
+        {
+          "label": "VOL5 — Volatility ±5%",
+          "type": "money"
+        },
+        {
+          "label": "DN3 — Downside −3%/mo from M6",
+          "type": "money"
+        }
+      ]
+    },
+    {
+      "name": "Manual shocks",
+      "family": "Drill-in detail",
+      "columns": [
+        {
+          "label": "Field",
+          "type": "text"
+        },
+        {
+          "label": "Type",
+          "type": "text"
+        },
+        {
+          "label": "Meaning",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "Checks",
+      "family": "Assurance",
+      "columns": [
+        {
+          "label": "Check",
+          "type": "text"
+        },
+        {
+          "label": "Got",
+          "type": "money"
+        },
+        {
+          "label": "Expected",
+          "type": "money"
+        },
+        {
+          "label": "Difference",
+          "type": "money"
+        },
+        {
+          "label": "Tolerance",
+          "type": "num"
+        },
+        {
+          "label": "Pass",
+          "type": "bool"
+        },
+        {
+          "label": "Why it must hold",
+          "type": "text"
+        }
+      ]
+    }
+  ]
+}

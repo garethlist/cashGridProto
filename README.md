@@ -99,6 +99,41 @@ npm run build    # production build to dist/
 npm run bundle   # build + inline everything into a single self-contained artifact.html
 ```
 
+## Reviewing the test data
+
+None of the prototype's data is stored — it's generated on every load by
+`makeInitialState` from the seed profiles in `src/views.js`, then overlaid with
+the EUR sweep. To review it away from the app, run that generation once and write
+it down:
+
+```bash
+npm run export-data
+```
+
+This produces `export/Cash Forecast Grid - test data.xlsx`, covering the seed
+profiles, bank accounts, cash pools, every grid view, the source-type vocabulary,
+the payment terms and invoice-survival curve, every daily cashflow, the bucket
+aggregates at week and month granularity, the group consolidation in each display
+currency, model metadata, the invoice-level drill-in detail, and the scenario
+lines. A **Contents** tab indexes the rest and a **Checks** tab carries the
+reconciliation assertions, so the numbers can be trusted before anyone reads
+them. Tab and row counts track whatever the model currently generates — rerun the
+command after changing `model.js` or `views.js`.
+
+`scripts/export-data.mjs` imports the real model and emits a generic
+`{name, note, columns, rows}` description per sheet;
+`scripts/build-workbook.py` formats that into the workbook (needs
+`pip install openpyxl`). All domain knowledge stays in the Node side, so the
+export can't drift from the app. `export/` is git-ignored.
+
+Two sheets carry a caveat, called out on the sheets themselves: the model
+statistics (MAPE / Bias / Coverage) and the invoice-level allocations are seeded
+from `row.id`, and `uid()` embeds `performance.now()` — so they're stable within
+one page load but differ between loads. Cell totals, daily values and balances
+are fully deterministic.
+
+`npm run check-scopes` runs the standalone reconciliation check on its own.
+
 `npm run bundle` runs the Vite build then `inline.mjs`, which folds the CSS and
 JS into one standalone `artifact.html` (no external requests) — the file that
 gets published as a hosted Claude Artifact. It's git-ignored (a build output)
@@ -138,6 +173,9 @@ GitHub Actions* — and stays 404 while the repository is private.)
 | `src/components/ShockIcon.jsx`, `CategoryTag.jsx` | Shock spike icon; model-category tag |
 | `src/index.css` | Styling, theme variables, alignment/sticky rules |
 | `inline.mjs` | Inlines the Vite build into a single `artifact.html` |
+| `scripts/export-data.mjs` | Builds every grid headlessly and dumps all test data as sheet descriptions |
+| `scripts/build-workbook.py` | Formats that dump into `export/Cash Forecast Grid - test data.xlsx` |
+| `scripts/check-scopes.mjs` | Reconciliation check: account and pool cuts add back to their company and to GROUP |
 
 ## How alignment works
 

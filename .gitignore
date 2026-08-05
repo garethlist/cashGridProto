@@ -8,3 +8,6 @@ npm-debug.log*
 
 # build output — the inlined single-file bundle published as a Claude Artifact
 artifact.html
+
+# generated output — the test-data workbook and its intermediate (npm run export-data)
+export

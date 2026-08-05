@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "inline": "node inline.mjs",
-    "bundle": "vite build && node inline.mjs"
+    "bundle": "vite build && node inline.mjs",
+    "export-data": "node scripts/export-data.mjs && python scripts/build-workbook.py",
+    "export-data:accept": "node scripts/export-data.mjs --accept && python scripts/build-workbook.py",
+    "check-scopes": "node scripts/check-scopes.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
