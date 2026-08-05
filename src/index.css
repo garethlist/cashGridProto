@@ -86,9 +86,19 @@
   --sc1: var(--uniun-blue);
   --sc2: var(--uniun-orange);
   --sc3: var(--uniun-purple);
+  /* Outlier mode. A cyan that belongs to none of the scenarios and none of the
+     category swatches, so a ring on the line can't be mistaken for a series —
+     the same cyan the chart's standing notes already use to annotate itself.
+     Bright enough to read as a mark on the plot, too light to read as text on
+     white (2.5:1), so labels take a deeper cyan; dark mode needs no such split. */
+  --outlier: #06b6d4;
+  --outlier-ink: #0e7490;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.06);
   --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.1);
+  /* slim drawer scrollbars: barely there at rest, legible under the cursor */
+  --scroll-thumb: var(--uniun-gray-mid-light);
+  --scroll-thumb-hover: var(--uniun-gray-mid-2);
 }
 
 /* Dark palette — the Uniun system is light-only, so this is derived from its
@@ -106,9 +116,13 @@
   --grid: #1c1c1c;
   --rail-bg: #0d0d0d;
   --accent: var(--uniun-green);
+  /* on near-black the bright cyan already clears AA, so labels use it directly */
+  --outlier-ink: var(--outlier);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5);
   --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --scroll-thumb: #333333;
+  --scroll-thumb-hover: #4d4d4d;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -123,9 +137,12 @@
     --grid: #1c1c1c;
     --rail-bg: #0d0d0d;
     --accent: var(--uniun-green);
+    --outlier-ink: var(--outlier);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5);
     --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+    --scroll-thumb: #333333;
+    --scroll-thumb-hover: #4d4d4d;
   }
 }
 
@@ -1694,6 +1711,35 @@ body {
 .chart__guide { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
 .chart__hoverdot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 
+/* --- outlier markers ------------------------------------------------------ */
+/* A ring on the line at each flagged day. The hit disc is twice the ring's
+   radius and invisible: on a year-long axis a 6px target is not something a
+   pointer can be expected to land on. */
+.chart__outlier { cursor: pointer; }
+.chart__outlier:focus { outline: none; }
+.chart__outlier-hit { fill: transparent; stroke: none; }
+.chart__outlier-halo {
+  fill: color-mix(in srgb, var(--outlier) 20%, transparent);
+  stroke: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: found-pulse 2.2s ease-in-out infinite;
+}
+.chart__outlier-ring {
+  fill: var(--panel);
+  stroke: var(--outlier);
+  stroke-width: 2;
+  transition: r var(--dur-fast) var(--ease-standard);
+}
+.chart__outlier:hover .chart__outlier-ring,
+.chart__outlier:focus-visible .chart__outlier-ring { r: 8px; }
+/* the one being drilled into fills in, so the panel and the chart agree */
+.chart__outlier--on .chart__outlier-ring { fill: var(--outlier); stroke-width: 2.5; }
+.chart__outlier--on .chart__outlier-halo { animation: none; fill: color-mix(in srgb, var(--outlier) 30%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .chart__outlier-halo { animation: none; }
+}
+
 /* --- low point finder ---------------------------------------------------- */
 /* pinned guide + dot switch to the brand pink so the highlight matches the
    finder button that opened it */
@@ -1842,6 +1888,78 @@ body {
 .chart__tip-modelname { font-size: 10.5px; font-weight: 600; color: var(--muted-strong); }
 .chart__tip-row--sub { margin-top: 7px; padding-top: 8px; border-top: 1px solid var(--grid); }
 .chart__tip-bucket { margin-top: 6px; font-size: 11px; color: var(--muted); }
+.chart__tip-bucket--top { margin: 0 0 7px; }
+
+/* The composition tip overlays a chart being read, so it's pared back to the day,
+   the split and the total — narrower, tighter, and with the share sitting inline
+   with its value rather than stacked under it, which saves a line per band. */
+.chart__tip--stack { width: 178px; padding: 9px 11px; border-radius: 10px; }
+.chart__tip--stack .chart__tip-date { font-size: 11.5px; margin-bottom: 6px; }
+.chart__tip--stack .chart__tip-row { gap: 10px; padding: 1.5px 0; font-size: 11.5px; }
+.chart__tip--stack .chart__tip-val { flex-direction: row; align-items: baseline; gap: 6px; }
+.chart__tip--stack .chart__tip-row--sub { margin-top: 5px; padding-top: 6px; }
+
+/* composition stack — one row split into its children */
+/* Bands ease between full strength and receded as the pointer sweeps, rather
+   than snapping — the transition is what makes the handover read as a movement.
+   Short enough to keep up with a fast sweep. */
+.chart__stackband { stroke: none; transition: opacity 130ms var(--ease-standard); }
+/* every band boundary gets the hue at full strength, so the steps stay separated
+   even where two tones sit close together */
+.chart__stackedge { fill: none; stroke-width: 1.25; stroke-opacity: 0.9; transition: opacity 130ms var(--ease-standard); }
+
+/* key for the stack, in the gutter's empty upper area */
+.chart__gutter-legend {
+  position: absolute;
+  top: 24px;
+  left: var(--pad);
+  max-width: calc(100% - var(--pad) - 52px);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* clears the standing note when a grid carries both */
+.chart__gutter-legend--pushed { top: 74px; }
+.chart__legenditem { display: flex; align-items: center; gap: 7px; min-width: 0; transition: opacity 130ms var(--ease-standard); }
+.chart__legendswatch {
+  position: relative;
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid;
+  overflow: hidden;
+}
+.chart__legendhatch {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(45deg, currentColor 0 1px, transparent 1px 4px);
+  opacity: 0.5;
+}
+.chart__legendname {
+  font-size: 10.5px;
+  color: var(--muted-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* the bands are clickable — clicking one holds it forward after the pointer
+   leaves, so its row stays lit in the table while you read across it */
+.chart__stack { cursor: pointer; }
+.chart__legenditem--held .chart__legendname { color: var(--ink); font-weight: var(--fw-semibold); }
+.chart__legendhold {
+  flex: none;
+  font-size: 8.5px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.chart__tip-swatch { width: 9px; height: 9px; border-radius: 2px; }
+/* the band the plot is currently holding forward, named in the tip too */
+.chart__tip-row--lead .chart__tip-name { color: var(--ink); font-weight: var(--fw-semibold); }
 .is-neg { color: var(--neg) !important; }
 .is-pos { color: var(--pos) !important; }
 
@@ -1924,12 +2042,24 @@ body {
 /* keep the divider while adding the focus marker */
 .grid__row--focused .grid__rowhead { box-shadow: inset 3px 0 0 var(--accent), inset -1px 0 0 var(--border); }
 
+/* The stack band the chart is holding forward, lit in the table so the shape and
+   its numbers read together. It carries the stack's own pink rather than the
+   focus accent, because it answers to the chart, not to the selection. */
+.grid__row--item .grid__rowhead,
+.grid__row--item .grid__cell { transition: background 130ms var(--ease-standard); }
+.grid__row--lit .grid__rowhead,
+.grid__row--lit .grid__cell { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.grid__row--lit .grid__rowhead { box-shadow: inset 3px 0 0 var(--brand), inset -1px 0 0 var(--border); }
+
 /* isolate mode: grey out every row except the focused category
    (opacity is applied to the <tr>, since it is ignored on <td>) */
 .grid__row, .grid__section { transition: opacity 0.15s ease; }
 .grid--focusmode .grid__row,
 .grid--focusmode .grid__section { opacity: 0.3; }
 .grid--focusmode .grid__row--focused { opacity: 1; }
+/* the lit band is a child of the focused row, not the focused row itself, so it
+   needs lifting out of the dimming in its own right */
+.grid--focusmode .grid__row--lit { opacity: 1; }
 /* The section headers carry the whole-section select, so in Row mode they stay
    legible while rows are isolated — only their figures dim. (Opacity on the row
    would cap the button's too, so it's applied to the cells instead.) */
@@ -2156,6 +2286,27 @@ body {
   margin-left: 1px;
 }
 
+/* "Outliers" toggle — sits beside the granularity control, monthly mode only */
+.outlierbtn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-strong); }
+.outlierbtn:hover:not(:disabled) { color: var(--outlier-ink); border-color: var(--outlier); }
+.outlierbtn--on,
+.outlierbtn--on:hover {
+  color: var(--outlier-ink);
+  border-color: var(--outlier);
+  background: color-mix(in srgb, var(--outlier) 12%, transparent);
+}
+.outlierbtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.outlierbtn__count {
+  background: var(--outlier);
+  color: var(--uniun-white);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  border-radius: var(--r-pill);
+  padding: 3px 6px;
+  margin-left: 1px;
+}
+
 /* "Diverge shocks" toggle — icon + label, orange when on */
 .divergebtn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-strong); }
 .divergebtn:hover { color: var(--sc2); border-color: var(--sc2); }
@@ -2225,6 +2376,73 @@ body {
   z-index: 50;
 }
 .drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
+
+/* --- side-panel scrollbars ------------------------------------------------
+   The OS default bar is wide and tracked, so down the edge of a 380–460px
+   drawer it reads as a second border. These are thin, trackless and
+   low-contrast: a slim thumb on nothing. Setting `scrollbar-width` disables
+   ::-webkit-scrollbar wherever the standard properties are understood, so the
+   webkit block below is the fallback for older Safari/Chromium only — the two
+   never both apply, and both land on the same --scroll-thumb tokens. */
+.shockspanel__body,
+.balpanel__body,
+.underpanel__body,
+.outpanel__body,
+.modelpanel__body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+@supports not (scrollbar-width: thin) {
+  .shockspanel__body::-webkit-scrollbar,
+  .balpanel__body::-webkit-scrollbar,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar,
+  .modelpanel__body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .shockspanel__body::-webkit-scrollbar-track,
+  .balpanel__body::-webkit-scrollbar-track,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar-track,
+  .modelpanel__body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  /* the transparent border insets the thumb so it floats clear of the content */
+  .shockspanel__body::-webkit-scrollbar-thumb,
+  .balpanel__body::-webkit-scrollbar-thumb,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar-thumb,
+  .modelpanel__body::-webkit-scrollbar-thumb {
+    background: var(--scroll-thumb);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: var(--r-pill);
+  }
+  .shockspanel__body::-webkit-scrollbar-thumb:hover,
+  .balpanel__body::-webkit-scrollbar-thumb:hover,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar-thumb:hover,
+  .modelpanel__body::-webkit-scrollbar-thumb:hover {
+    background: var(--scroll-thumb-hover);
+    background-clip: content-box;
+  }
+  /* no arrow buttons, and no filled square where the two bars meet */
+  .shockspanel__body::-webkit-scrollbar-button,
+  .balpanel__body::-webkit-scrollbar-button,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar-button,
+  .modelpanel__body::-webkit-scrollbar-button,
+  .shockspanel__body::-webkit-scrollbar-corner,
+  .balpanel__body::-webkit-scrollbar-corner,
+  .underpanel__body::-webkit-scrollbar,
+  .outpanel__body::-webkit-scrollbar-corner,
+  .modelpanel__body::-webkit-scrollbar-corner {
+    display: none;
+    background: transparent;
+  }
+}
+
 .shockspanel {
   position: fixed; top: 0; right: 0; height: 100%;
   width: 380px; max-width: 92vw;
@@ -2610,24 +2828,62 @@ body {
   color: #fff;
 }
 .grouprow__level--off { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
-/* drag handle — grab the level and drop it into a new slot */
+/* The whole row is the drag handle; the grip just advertises it. Selection is
+   suppressed across the row, or a drag started on the label text picks up a text
+   selection instead of the row. */
+.grouprow--draggable { cursor: grab; user-select: none; -webkit-user-select: none; }
+.grouprow--draggable .grouprow__pick { cursor: inherit; }
+.grouprow--draggable:active { cursor: grabbing; }
 .grouprow__grip {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  cursor: grab;
   padding: 2px 1px;
   margin-left: -2px;
   border-radius: var(--r-xs);
   transition: color var(--dur-fast) var(--ease-standard);
 }
-.grouprow__grip:hover { color: var(--ink); }
-.grouprow__grip:active { cursor: grabbing; }
+.grouprow--draggable:hover .grouprow__grip { color: var(--ink); }
 .grouprow--dragging { opacity: 0.45; }
 /* the level being dropped onto gets a top rule marking the insertion point */
 .grouprow--drop { box-shadow: inset 0 2px 0 var(--accent); }
+/* chart-stacking switch — sits with the levels, since it follows the first two */
+.groupstack {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: calc(100% - 8px);
+  margin: 4px 4px 0;
+  padding: 7px 10px;
+  text-align: left;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.groupstack:hover { background: var(--panel-2); }
+.groupstack__box {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong, var(--border));
+  background: var(--panel-2);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+.groupstack--on .groupstack__box { background: var(--accent); border-color: var(--accent); }
+.groupstack__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.groupstack__label { font-size: var(--fs-small); font-weight: var(--fw-medium); color: var(--ink); }
+.groupstack__hint { font-size: var(--fs-micro); color: var(--muted); }
+
 .grouppick__summary {
   margin: 3px 4px 1px;
   padding: 7px 10px;
@@ -2746,6 +3002,111 @@ body {
 .balacct__sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .balacct__sub.is-neg { color: color-mix(in srgb, var(--neg) 70%, var(--muted)); }
 .balacct__bar { position: absolute; left: 0; bottom: 0; height: 2px; opacity: 0.6; }
+
+/* ---- outlier drill-in drawer -------------------------------------------- */
+/* Same right-hand dock and flat frame as the underlying-detail drawer; the two
+   are alternative answers to "what is behind this number" and never coexist. */
+.outpanel {
+  position: fixed; top: 0; right: 0; height: 100%;
+  width: 460px; max-width: 96vw;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  z-index: 51;
+  display: flex; flex-direction: column;
+}
+.outpanel--open { transform: translateX(0); }
+.outpanel__head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 15px 18px 13px; border-bottom: 1px solid var(--border);
+}
+.outpanel__titles { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.outpanel__tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  align-self: flex-start;
+  padding: 3px 8px 3px 6px; border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--outlier) 14%, transparent);
+  color: var(--outlier-ink);
+  font-size: var(--fs-micro); font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: var(--tracking-wide);
+}
+.outpanel__date { font-weight: var(--fw-semibold); font-size: 15px; }
+.outpanel__sub { font-size: 12px; color: var(--muted); font-weight: 600; }
+.outpanel__headctl { display: flex; align-items: center; gap: 6px; flex: none; }
+.outpanel__nav { display: inline-flex; align-items: center; gap: 2px; }
+/* iconbtn's hover is the close-button's red; stepping between peaks isn't
+   destructive, so the arrows take the mode's own colour instead. */
+.outpanel__navbtn:hover { background: color-mix(in srgb, var(--outlier) 16%, transparent); color: var(--outlier-ink); }
+.outpanel__navpos { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.outpanel__total {
+  display: flex; align-items: stretch;
+  border-bottom: 1px solid var(--border); background: var(--panel-2);
+}
+.outpanel__total-block { display: flex; flex-direction: column; gap: 3px; padding: 11px 18px; flex: 1; min-width: 0; }
+.outpanel__total-block--alt { border-left: 1px solid var(--border); }
+.outpanel__total-label { font-size: var(--fs-micro); font-weight: var(--fw-regular); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
+.outpanel__total-val { font-size: 18px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.outpanel__total-range { font-size: 13px; font-weight: var(--fw-medium); color: var(--muted-strong); font-variant-numeric: tabular-nums; }
+.outpanel__body { padding: 14px 12px 18px; overflow-y: auto; display: flex; flex-direction: column; }
+.outpanel__colhead {
+  display: flex; justify-content: space-between; padding: 14px 8px 6px;
+  font-size: 10px; font-weight: var(--fw-regular); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted);
+}
+
+/* the verdict: one named cause, or an explicit statement that there isn't one */
+.outverdict {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 0 6px; padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--outlier) 40%, transparent);
+  background: color-mix(in srgb, var(--outlier) 7%, transparent);
+  border-radius: var(--r-md);
+}
+.outverdict--none { border-color: var(--border); background: var(--panel-2); }
+.outverdict__label {
+  font-size: var(--fs-micro); font-weight: var(--fw-semibold);
+  text-transform: uppercase; letter-spacing: var(--tracking-wide);
+  color: var(--outlier-ink);
+}
+.outverdict--none .outverdict__label { color: var(--muted); }
+.outverdict__cat { display: flex; align-items: center; gap: 9px; }
+.outverdict__swatch { width: 4px; height: 17px; border-radius: 2px; flex: none; background: var(--muted); }
+.outverdict__name { font-size: 16px; font-weight: var(--fw-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outverdict__share {
+  margin-left: auto; flex: none;
+  font-size: 13px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
+  color: var(--outlier-ink);
+}
+.outverdict__why { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-strong); }
+
+/* the ranked movers, each against its own normal */
+.outmover { position: relative; border-bottom: 1px solid var(--border); }
+.outmover__body { display: flex; align-items: center; gap: 9px; padding: 9px 8px; }
+.outmover__rank { flex: none; width: 14px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.outmover__swatch { flex: none; width: 4px; height: 15px; border-radius: 2px; background: var(--muted); }
+.outmover__name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outmover__share { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.outmover__amts { margin-left: auto; flex: none; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.35; }
+.outmover__excess { font-size: 13px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.outmover__normal { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.outmover__bar { position: absolute; left: 0; bottom: 0; height: 2px; opacity: 0.6; }
+.outmover--driver { background: color-mix(in srgb, var(--outlier) 6%, transparent); }
+.outmover--driver .outmover__name { font-weight: var(--fw-semibold); }
+
+.outpanel__offsets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 8px 4px; }
+.outpanel__offsets-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
+.outpanel__offset {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); background: var(--panel-2);
+  font-size: 11.5px; color: var(--muted-strong);
+}
+.outpanel__offset strong { font-variant-numeric: tabular-nums; color: var(--ink); }
+.outpanel__offset-swatch { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+.outpanel__method {
+  margin: 18px 8px 0; padding-top: 12px; border-top: 1px solid var(--border);
+  font-size: 11px; line-height: 1.55; color: var(--muted);
+}
 
 /* ---- underlying detail drawer (Base mode) -------------------------------- */
 .underpanel {

@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, SCENARIOS } from './model.js'
+import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, findFlowOutliers, attributeOutlier, SCENARIOS, SOURCE_TYPE_UNSET } from './model.js'
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView, EUR_SWEEP,
@@ -11,8 +11,10 @@ import ShocksPanel from './components/ShocksPanel.jsx'
 import UnderlyingPanel from './components/UnderlyingPanel.jsx'
 import ModelPanel from './components/ModelPanel.jsx'
 import BalancePanel from './components/BalancePanel.jsx'
+import OutlierPanel from './components/OutlierPanel.jsx'
 import ShockIcon from './components/ShockIcon.jsx'
 import FinderIcon from './components/FinderIcon.jsx'
+import OutlierIcon from './components/OutlierIcon.jsx'
 import CategoryTag from './components/CategoryTag.jsx'
 import { CurrencyProvider, useMoney } from './currency.jsx'
 
@@ -141,11 +143,26 @@ export default function App() {
   const [showContrib, setShowContrib] = useState(false) // contributions strip is tall — off by default
   const [showScenario, setShowScenario] = useState(false) // the scenario/compare control line — opt in
   const [findLow, setFindLow] = useState(false) // "low point finder" — pin + highlight the lowest point on the chart
+  // Outlier mode. Monthly columns compress ~30 days into one cell, so a single
+  // day's spike is plain on the chart but has no column of its own to click.
+  // Switching this on marks the days whose movement sits outside the usual range
+  // and makes each one openable — the only route from a visible peak to the day
+  // and category behind it. Monthly only: at day or week granularity the column
+  // the spike sits in already *is* the day (or close enough to it).
+  const [outlierMode, setOutlierMode] = useState(false)
+  const [outlierDay, setOutlierDay] = useState(null) // the day index being drilled into
   // Row grouping under Inflow/Outflow: either one level, or a drill-down chain.
   // Each mode keeps its own selection so switching between them is lossless.
   const [groupMulti, setGroupMulti] = useState(false)
   const [groupSingle, setGroupSingle] = useState('category')
   const [groupChain, setGroupChain] = useState(['currency', 'category'])
+  // With a drill-down running, selecting one of its top-level rows splits that
+  // row on the chart into the level beneath it. On by default; switched off from
+  // the grouping menu when the combined magnitude matters more than the mix.
+  const [chartStack, setChartStack] = useState(true)
+  // The stack band the chart is currently holding forward, as a grid row id, so
+  // the table can light the matching row and put the numbers next to the shape.
+  const [litRow, setLitRow] = useState(null)
   // What you've *chosen*. What actually gets applied is this minus any level the
   // current grid has made redundant — see groupLevels below. The choice itself is
   // never rewritten, so it comes back intact when you return to a grid that can
@@ -498,6 +515,10 @@ export default function App() {
       const only = [...(keys.cashPool ?? [])][0]
       out.cashPool = only === 'unpooled' ? 'No accounts here are pooled' : 'This grid is one pool'
     }
+    if (n('sourceType') <= 1) {
+      const only = [...(keys.sourceType ?? [])][0]
+      out.sourceType = only === SOURCE_TYPE_UNSET ? 'No rows here carry a source type' : `All rows are ${only}`
+    }
     return out
   }, [groupSources])
 
@@ -523,6 +544,7 @@ export default function App() {
     if (!row.values) return
     const dailyValues = bucket.dayIndices.map((i) => Number(row.values[i]) || 0)
     const data = cellUnderlying(row, bucket, dailyValues, state.days)
+    setOutlierDay(null) // the two drill-ins share the right-hand dock
     setUnderlying({ section, row, bucket, data })
   }, [state.days])
   const closeUnderlying = useCallback(() => setUnderlying(null), [])
@@ -664,6 +686,175 @@ export default function App() {
     return out
   }, [focusRows, state.days.length])
   const focusLabel = singleFocus ? singleFocus.name : `${focusRows.length} categories`
+
+  // Composition view: one top-level drill-down row, split into the level beneath
+  // it. Deliberately fixed to the chain's first two levels — selecting deeper
+  // keeps the plain net-flow line, so the stack always answers the same question
+  // however long the chain gets.
+  //
+  // Daily, like every other series on this chart — the columns only set the x
+  // geometry. A weekday-only category does drop to the floor at each weekend, so
+  // the bands read as a run of islands rather than a continuous ribbon, but that
+  // is the shape of the underlying cash and the rest of the chart shows it too.
+  // Outlier mode wants the daily line back: it marks single days, and a composition
+  // is a band of colour, not a point you can put a ring on. The composition is a
+  // default, outlier mode is something you deliberately switched on, so the
+  // explicit choice wins and the stack steps aside until it's switched off again.
+  const outlierRequested = outlierMode && granularity === 'month'
+  const stack = useMemo(() => {
+    if (!chartStack || outlierRequested || groupLevels.length < 2) return null
+    const parent = singleFocus
+    if (!parent || parent.depth !== 0 || !parent.hasChildren) return null
+    const kids = (parent.section === 'inflows' ? agg.inflowRows : agg.outflowRows)
+      .filter((r) => r.parentPath === parent.path)
+    if (kids.length < 2) return null
+    // Outflows stack downward, matching the sign convention of the net-flow line
+    // this replaces. One parent means one section, so a stack is never mixed.
+    const sign = parent.section === 'outflows' ? -1 : 1
+    // Children that are categories bring their own colours, and keep them —
+    // they're genuinely different things. A level like source type has none, and
+    // there the stack is one row in several states, so it steps down the base
+    // pink instead: the same colour the isolated-flow line it replaces carries
+    // (see focusColor), which keeps the chart meaning "what you selected" rather
+    // than changing hue every time you pick a different row.
+    const ownColors = kids.every((k) => k.color)
+    const bands = kids.map((k, i) => ({
+      id: k.id,
+      name: k.name,
+      color: ownColors ? k.color : 'var(--brand)',
+      // Position in the ramp, 1 (first, strongest) → 0 (last, faintest). The
+      // chart turns this into tone and texture; a full 1→0 span is what makes
+      // three steps of one hue actually separate.
+      fade: ownColors ? 1 : 1 - i / Math.max(1, kids.length - 1),
+      ramped: !ownColors,
+      values: k.values.map((v) => sign * v),
+    }))
+    const D = state.days.length
+    return {
+      name: parent.name,
+      color: parent.color,
+      bands,
+      total: Array.from({ length: D }, (_, i) => bands.reduce((s, b) => s + (b.values[i] ?? 0), 0)),
+    }
+  }, [chartStack, outlierRequested, groupLevels.length, singleFocus, agg, state.days.length])
+
+  // --- outlier detection & attribution ---------------------------------------
+  // Every (entity × category) atom on the active grid: its daily series in the
+  // display currency, signed so an outflow reads negative, tagged with the grouped
+  // path it sits under. This is the finest grain the grid holds, and the level an
+  // outlier has to be explained at — grouping exists to summarise, and a summary
+  // can't name a cause. The tag is what lets the explanation be narrowed to
+  // whatever the chart is currently isolating, however deep the drill-down runs.
+  const flowAtoms = useMemo(() => {
+    const out = []
+    for (const { meta, state: src, conv } of groupSources) {
+      for (const section of ['inflows', 'outflows']) {
+        const sign = section === 'outflows' ? -1 : 1
+        for (const r of src[section] ?? []) {
+          const keyed = { currency: meta.currency, code: r.code, account: r.account, sourceType: r.sourceType }
+          const path = groupLevels.reduce((p, lv) => `${p}/${lv}:${GROUP_LEVELS[lv].key(keyed)}`, section)
+          out.push({
+            id: `${section}:${r.id}`,
+            name: r.name,
+            code: r.code,
+            color: r.color,
+            section,
+            path,
+            values: r.values.map((v) => sign * conv(Number(v) || 0)),
+          })
+        }
+      }
+    }
+    return out
+  }, [groupSources, groupLevels])
+
+  // The categories an outlier is attributed across: everything on the grid, or —
+  // when rows are isolated on the chart — only what sits beneath the selection, so
+  // the explanation answers for the line you actually clicked.
+  //
+  // Atoms are merged by CATEGORY CODE ALONE, deliberately crossing the Inflow /
+  // Outflow split. Only the sweep appears on both sides, as a matched pair of
+  // legs, and netting them is the whole point: a leg swept out and straight back
+  // in moved no cash, so counting each separately would put a mechanical 50% of
+  // every attribution against "Sweep" and bury whatever actually happened.
+  //
+  // Isolated rows drop the sweep entirely, matching aggregateGrouped — the series
+  // being explained excludes it, so the explanation has to as well.
+  const attributionRows = useMemo(() => {
+    const picked = focusActive
+      ? flowAtoms.filter((a) => a.code !== 'SWEEP' && focusRows.some((r) => a.path === r.path || a.path.startsWith(`${r.path}/`)))
+      : flowAtoms
+    const byCat = new Map()
+    for (const a of picked) {
+      const key = a.code ?? a.id
+      const cur = byCat.get(key)
+      if (!cur) {
+        byCat.set(key, { id: key, name: a.name, code: a.code, color: a.color, values: a.values.slice() })
+      } else {
+        for (let i = 0; i < cur.values.length; i++) cur.values[i] += a.values[i]
+      }
+    }
+    return [...byCat.values()]
+  }, [flowAtoms, focusActive, focusRows])
+
+  // `stack` is always null while outlier mode is on (it stands aside — see above),
+  // so this only ever restates outlierRequested. Kept as a guard so a future change
+  // to the stack's own conditions can't silently start marking days on a chart that
+  // isn't drawing them.
+  const outlierActive = outlierRequested && !stack
+  // The series tested is the net of the isolated selection, or the grid's own daily
+  // net movement. Never the balance — see findFlowOutliers on why the level can't
+  // be tested even when the level is what's drawn.
+  const flowSeries = focusActive ? focusSeries : daily.dailyNet
+  const outlierScan = useMemo(
+    () => (outlierActive && flowSeries ? findFlowOutliers(flowSeries) : null),
+    [outlierActive, flowSeries]
+  )
+  const outliers = outlierScan?.outliers ?? []
+  const outlierIndex = outlierDay == null ? -1 : outliers.findIndex((o) => o.dayIndex === outlierDay)
+  const activeOutlier = outlierIndex >= 0 ? outliers[outlierIndex] : null
+  const outlierDetail = useMemo(
+    () => (activeOutlier
+      ? attributeOutlier(activeOutlier.dayIndex, attributionRows, { direction: Math.sign(activeOutlier.excess) || 1 })
+      : null),
+    [activeOutlier, attributionRows]
+  )
+  // Isolate one category and there is nothing left beneath it to attribute to —
+  // an attribution would just name the category back at you. The day itself is
+  // then the finding, and the panel says as much rather than claiming a cause.
+  const outlierSoleCategory = attributionRows.length <= 1
+  // The gutter note explains why the chart looks the way it does, so outlier mode
+  // uses it to say what the rings are — but never at the cost of the standing
+  // sweep note, which explains a line pinned flat at zero and can't be displaced.
+  const noteForChart = chartNote ?? (outlierActive
+    ? outliers.length
+      ? { label: `${outliers.length} outlier${outliers.length === 1 ? '' : 's'}`, detail: 'Days whose movement is outside the usual range — click a ring to drill in' }
+      : { label: 'No outliers', detail: 'No day’s movement sits outside the usual range on this series' }
+    : null)
+
+  // Both drill-ins dock to the same edge, so opening one dismisses the other.
+  const openOutlier = useCallback((dayIndex) => {
+    setUnderlying(null)
+    setOutlierDay((cur) => (cur === dayIndex ? null : dayIndex))
+  }, [])
+  const closeOutlier = useCallback(() => setOutlierDay(null), [])
+  // Walk the peaks from the panel, wrapping at either end — with a year of days
+  // behind twelve columns, hunting the next ring by eye is the slow way round.
+  const stepOutlier = (delta) => {
+    if (!outliers.length) return
+    const next = (outlierIndex + delta + outliers.length) % outliers.length
+    setOutlierDay(outliers[next].dayIndex)
+  }
+  // An outlier is a day on one particular series, so anything that changes what's
+  // plotted invalidates the open one.
+  useEffect(() => { setOutlierDay(null) }, [activeTab, selection, granularity, groupSelection])
+  useEffect(() => { if (!outlierActive) setOutlierDay(null) }, [outlierActive])
+  useEffect(() => {
+    if (!activeOutlier) return undefined
+    const onKey = (e) => e.key === 'Escape' && closeOutlier()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeOutlier, closeOutlier])
 
   const balanceLines = useMemo(() => {
     const ov = overlays.find((s) => s.id === overlayId)
@@ -986,7 +1177,7 @@ export default function App() {
     <CurrencyProvider currency={displayCurrency} locale={displayLocale}>
     <div className="shell">
     <UniunRail theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
-    <div className={`app ${underlying ? 'app--docked' : ''} ${balanceMode ? 'app--docked-left' : ''}`}>
+    <div className={`app ${underlying || activeOutlier ? 'app--docked' : ''} ${balanceMode ? 'app--docked-left' : ''}`}>
       {/* view tabs — company / currency grid combinations */}
       <div className="tabbar">
         <div className="tabbar__tabs">
@@ -1139,6 +1330,24 @@ export default function App() {
         )}
         {/* right-aligned, so it lines up with the right edge of the last KPI card */}
         <div className="app__controls">
+          {/* Monthly only — a month column hides the day a spike happened on, which
+              is the whole reason this mode exists. */}
+          {granularity === 'month' && (
+            <button
+              className={`btn btn--sm outlierbtn ${outlierActive ? 'outlierbtn--on' : ''}`}
+              onClick={() => setOutlierMode((v) => !v)}
+              aria-pressed={outlierMode}
+              title={
+                outlierMode
+                  ? 'Hide the outlier markers'
+                  : 'Mark the days whose movement is outside the usual range, and drill into what caused them. Replaces a composition with its daily line while on.'
+              }
+            >
+              <OutlierIcon size={13} />
+              Outliers
+              {outlierActive && <span className="outlierbtn__count">{outliers.length}</span>}
+            </button>
+          )}
           <Segmented value={granularity} onChange={setGranularity} />
         </div>
       </header>
@@ -1316,14 +1525,15 @@ export default function App() {
             <AlignedChart
               days={state.days}
               lines={lines}
+              stack={stack}
               dailyNet={daily.dailyNet}
               buckets={buckets}
               labelW={labelW}
               colW={colW}
               contentW={contentW}
               height={chartH}
-              title={focusActive ? 'Daily flow' : 'Daily balance'}
-              note={chartNote}
+              title={stack ? 'Composition' : focusActive ? 'Daily flow' : 'Daily balance'}
+              note={noteForChart}
               markers={!focusActive}
               annotations={annotations}
               reserveMarkers={gridHasShocks}
@@ -1331,6 +1541,10 @@ export default function App() {
               pinnedDay={findLow && !focusActive && lowestIdx >= 0 ? lowestIdx : null}
               pinnedLabel="Lowest point"
               scrollParentRef={scrollRef}
+              onStackHover={setLitRow}
+              outliers={outliers}
+              activeOutlier={activeOutlier?.dayIndex ?? null}
+              onOutlierClick={openOutlier}
             />
             <ForecastTable
               buckets={buckets}
@@ -1363,6 +1577,9 @@ export default function App() {
               groupChain={groupChain}
               onGroupChain={setGroupChain}
               groupDisabled={groupDisabled}
+              chartStack={chartStack}
+              onChartStack={setChartStack}
+              litRow={litRow}
               underlyingCell={underlying ? { section: underlying.section, rowId: underlying.row.id, bucketKey: underlying.bucket.key } : null}
               shockRanges={shockRangesByRow}
             />
@@ -1414,6 +1631,22 @@ export default function App() {
         company={view.title}
         currency={displayCurrency}
         onClose={closeUnderlying}
+      />
+
+      <OutlierPanel
+        open={!!activeOutlier}
+        day={activeOutlier ? state.days[activeOutlier.dayIndex] : null}
+        scan={activeOutlier ? { ...activeOutlier, ...outlierScan, outliers: undefined } : null}
+        detail={outlierDetail}
+        soleCategory={outlierSoleCategory}
+        seriesLabel={focusActive ? focusLabel : 'Daily net movement'}
+        company={view.title}
+        currency={displayCurrency}
+        index={outlierIndex}
+        count={outliers.length}
+        onPrev={() => stepOutlier(-1)}
+        onNext={() => stepOutlier(1)}
+        onClose={closeOutlier}
       />
     </div>
     </div>

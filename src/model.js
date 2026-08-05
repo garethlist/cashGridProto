@@ -136,6 +136,7 @@ export function aggregate(state, buckets) {
       color: r.color,
       modelled: r.modelled,
       model: r.model,
+      sourceType: r.sourceType,
       synthetic: r.synthetic, // grouped rows (e.g. by currency) aren't real categories
       bucketValues: buckets.map((b) => b.dayIndices.reduce((s, i) => s + (Number(r.values[i]) || 0), 0)),
     }))
@@ -191,6 +192,131 @@ export function shockState(state, shocks) {
   return { ...state, inflows: shockRows('inflows', state.inflows), outflows: shockRows('outflows', state.outflows) }
 }
 
+// ---- source type -----------------------------------------------------------
+// Where a cash flow came from, independent of the category it lands in. The
+// vocabulary is fixed; a row carries one of these values in `sourceType`.
+//
+// It's being rolled out category by category, so most rows don't carry it yet.
+// An absent value is NOT 'Unknown' — 'Unknown' is a real source whose origin the
+// feed couldn't identify, whereas absent means the dimension hasn't reached that
+// category. Grouping shows the difference (see SOURCE_TYPE_UNSET).
+export const SOURCE_TYPES = [
+  'Bank Transaction',
+  // Not an ERP source but a derived one: the platform's own stitching of invoice
+  // data into a time-series forecast — see blendInvoiceForecast.
+  'Blend',
+  'Bulk items - FQM_FLOW',
+  'Confirmed Payment',
+  'Forecast',
+  'Import',
+  'Invoice',
+  'Invoice Payment',
+  'Manual Entry',
+  'Unknown',
+]
+export const SOURCE_TYPE_UNSET = 'Not set'
+
+// ---- invoice-derived value dates -------------------------------------------
+// AR and AP don't come from a model — they're the ERP's invoice register,
+// aggregated into cash flows by company, currency, category and value date,
+// where the value date is the invoice date plus the counterparty's payment
+// terms. So cash landing `d` days out can only come from an invoice already on
+// the register: one raised d days ago against terms longer than d. Terms don't
+// run much past 90 days, so each term bucket exhausts in turn and the series
+// thins out — heavy for the first few weeks, a trickle by month three, nothing
+// beyond. What fills the gap further out is forecast, not invoices, which is a
+// different source type and isn't modelled here yet.
+//
+// A typical spread of terms, with 30 days the industry standard.
+export const PAYMENT_TERMS = [
+  { days: 14, weight: 0.1 },
+  { days: 30, weight: 0.45 },
+  { days: 45, weight: 0.2 },
+  { days: 60, weight: 0.18 },
+  { days: 90, weight: 0.07 },
+]
+
+// Behaviour on top of the contractual terms — the same adjustment the value date
+// carries in the source system. AR slips: customers pay past terms, and by
+// varying amounts, so its buckets exhaust late and blur into one another. AP is
+// tighter, because you choose when to pay and the payment runs land on set days.
+const TERM_BEHAVIOUR = {
+  AR: { shift: 6, spread: 9 },
+  AP: { shift: 2, spread: 4 },
+}
+
+// Smooth 0→1 ramp, so a term bucket fades out over its spread rather than
+// falling off a cliff on one day.
+const smoothstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x))
+
+// The share of a steady-state day's invoiced volume still on the register `d`
+// days into the horizon: the tail of the terms distribution, blurred by
+// behaviour. 1 at the front (everything inside the shortest terms is already
+// invoiced) decaying to 0 once the longest terms are spent, ~15 weeks out.
+export function invoiceSurvival(d, side) {
+  const { shift, spread } = TERM_BEHAVIOUR[side]
+  let alive = 0
+  for (const t of PAYMENT_TERMS) {
+    const from = t.days + shift - spread // this bucket starts running out here
+    alive += t.weight * (1 - smoothstep((d - from) / (2 * spread)))
+  }
+  return alive
+}
+
+// ---- blending invoices with the time-series forecast ------------------------
+// Stand-in for a fitted SARIMA forecast: the category's underlying daily shape
+// with a smooth, slowly drifting error laid over it, widening with the horizon
+// the way a real forecast's does — a few percent out in the near term, close to
+// a tenth at twelve months. Two low-frequency components rather than day-to-day
+// noise, because no time-series model produces white noise. That widening is
+// precisely why the ERP's invoices take precedence while they last.
+function sarimaForecast(truth, seed) {
+  const n = truth.length
+  const rng = mulberry32(seed)
+  const phase1 = rng() * Math.PI * 2
+  const phase2 = rng() * Math.PI * 2
+  const freq1 = 1 / (55 + rng() * 30)
+  const freq2 = 1 / (110 + rng() * 60)
+  return truth.map((v, i) => {
+    const spread = 0.03 + 0.06 * Math.sqrt(i / Math.max(1, n - 1))
+    const wobble = 0.6 * Math.sin(i * freq1 + phase1) + 0.4 * Math.sin(i * freq2 + phase2)
+    return Math.round(v * (1 + spread * wobble))
+  })
+}
+
+// Knit the ERP's invoice-derived series together with the time-series forecast.
+//
+// The trick is that the invoice series isn't *wrong* in the overlap window — it's
+// incomplete. On day d it holds only the invoices already raised, which is
+// exactly s(d) of that day's expected volume, s being the same survival share the
+// value dates produce. So the two sources never compete for the same cash: the
+// ERP supplies what it covers, and the model tops up precisely the share it
+// doesn't.
+//
+//   total(d) = invoice(d) + (1 − s(d)) · forecast(d)
+//
+// That gives the ERP absolute precedence where it's complete (s = 1 → the model
+// contributes nothing), hands over to the model where the register is spent
+// (s = 0 → the model is the whole answer), and in between weights each by how
+// much of the day it can actually account for. Nothing is double-counted, and
+// because s is smooth there's no step at the join.
+//
+// The top-up is then split by where it lands, so the grid can show the knitting
+// rather than just its result:
+//   'Blend'    — model cash filling the gap the thinning register leaves behind
+//   'Forecast' — the pure model, once the register has nothing left to say
+export function blendInvoiceForecast(invoice, forecast, side) {
+  const blend = new Array(invoice.length).fill(0)
+  const pure = new Array(invoice.length).fill(0)
+  for (let i = 0; i < invoice.length; i++) {
+    const covered = invoiceSurvival(i, side)
+    const topUp = Math.round(forecast[i] * (1 - covered))
+    if (covered > 0) blend[i] = topUp
+    else pure[i] = topUp
+  }
+  return { blend, forecast: pure }
+}
+
 // ---- row grouping (single level or a drill-down hierarchy) ------------------
 // Every (entity × category) pair is an "atom". Grouping nests atoms by one or
 // more keys, so ['currency'] gives one level and ['currency','category'] gives a
@@ -210,6 +336,13 @@ export const GROUP_LEVELS = {
     hint: 'Accounts grouped into their pool',
     key: (a) => a.account?.pool ?? 'unpooled',
     name: (a) => CASH_POOLS[a.account?.pool]?.name ?? 'Not pooled',
+    color: () => null,
+  },
+  sourceType: {
+    label: 'Source type',
+    hint: 'Where the flow came from',
+    key: (a) => a.sourceType ?? SOURCE_TYPE_UNSET,
+    name: (a) => a.sourceType ?? SOURCE_TYPE_UNSET,
     color: () => null,
   },
 }
@@ -235,7 +368,7 @@ export function levelKeys(sources) {
     for (const { meta, state } of sources) {
       for (const section of ['inflows', 'outflows']) {
         for (const r of state[section] ?? []) {
-          keys.add(def.key({ currency: meta.currency, code: r.code, account: r.account }))
+          keys.add(def.key({ currency: meta.currency, code: r.code, account: r.account, sourceType: r.sourceType }))
         }
       }
     }
@@ -258,6 +391,7 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
         modelled: r.modelled,
         model: r.model,
         account: r.account,
+        sourceType: r.sourceType,
         values: r.values.map((v) => conv(Number(v) || 0)),
       }))
     )
@@ -284,6 +418,14 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
     for (const [k, kids] of groups) {
       const path = `${parentPath}/${lv}:${k}`
       const sample = kids[0]
+      // A row only carries a source type — or a category — if everything under
+      // it shares one. A Category row spanning Invoice + Blend + Forecast has no
+      // single source; a Currency row spanning every category has no single
+      // category. `code` is the grouping key, which is only the category code at
+      // the category level, so the cell drill-in needs these to know what it's
+      // actually looking at.
+      const oneSource = kids.every((a) => a.sourceType === sample.sourceType) ? sample.sourceType : null
+      const oneCode = kids.every((a) => a.code === sample.code) ? sample.code : null
       out.push({
         id: path,
         path,
@@ -293,6 +435,8 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
         name: def.name(sample),
         code: k,
         color: def.color(sample),
+        sourceType: oneSource,
+        categoryCode: oneCode,
         modelled: lv === 'category' ? sample.modelled : false,
         model: lv === 'category' ? sample.model : null,
         // only category rows are real categories with a model behind them
@@ -358,6 +502,140 @@ export function aggregateGrouped(sources, levels, buckets, openingBalance, D) {
     hasSweep,
     opening,
     closing,
+  }
+}
+
+// ---- outliers (the peak the usual range doesn't explain) --------------------
+// Peaks are always found on the DAILY FLOW, whichever series the chart happens to
+// be drawing. A balance is cumulative: over a growing horizon its largest values
+// sit at whichever end it grows toward, so an outlier test on the level flags the
+// trend rather than the event. The movement *into* a day is the event — and a
+// one-day spike in the balance is by definition a one-day spike in the flow — so
+// the flow is the series that can be tested and the day that can be explained.
+function medianOf(values) {
+  if (!values.length) return 0
+  const s = [...values].sort((a, b) => a - b)
+  const m = s.length >> 1
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+// Days whose net movement sits outside the series' usual range.
+//
+// The spread is measured with the median absolute deviation rather than a standard
+// deviation, because the spikes we're hunting for would inflate a standard
+// deviation enough to hide themselves inside it. `z` then reads as sigma-
+// equivalents either side of the median.
+export function findFlowOutliers(values, { z = 4, maxPeers = 2, gap = 2 } = {}) {
+  const n = values.length
+  const nothing = { median: 0, scale: 0, z, basis: 'spread', usualLo: 0, usualHi: 0, outliers: [], recurring: 0 }
+  // Too short a series has no "usual" to be outside of.
+  if (n < 14) return nothing
+
+  const med = medianOf(values)
+  const devs = values.map((v) => Math.abs(v - med))
+  const mad = 1.4826 * medianOf(devs)
+
+  // A zero MAD means over half the days sit exactly on the median. Such a series
+  // isn't a spread with outliers in its tail — it's a sparse set of events on an
+  // otherwise flat line: a loan drawdown, a monthly pay run, a quarterly tax bill.
+  // Scaling four deviations off the *events* would put the bar at four times the
+  // largest thing that ever happens, so nothing could ever clear it.
+  //
+  // On such a series "outside the usual range" means "something happened at all",
+  // and the bar is half a typical event. That flags every pay date as much as the
+  // one-off — which is fine, because the recurrence test below is what tells them
+  // apart, and it is far better placed to.
+  const sparse = mad <= 0
+  const moved = devs.filter((d) => d > 0)
+  const threshold = sparse ? (moved.length ? medianOf(moved) * 0.5 : 0) : z * mad
+  if (threshold <= 0) return { ...nothing, median: med, usualLo: med, usualHi: med }
+  // Keep `scale` the unit `score` is quoted in, so a score still reads as "how far
+  // outside" on either basis.
+  const scale = threshold / z
+
+  // Candidates by magnitude, then a recurrence test. Magnitude on its own flags
+  // every month-end payroll and every quarterly tax run: each sits far outside the
+  // usual daily range, and each is entirely expected. What makes a spike worth
+  // explaining is being large *and* rare — so a day only survives if very few
+  // other days move comparably far in the same direction.
+  let recurring = 0
+  const found = []
+  for (let i = 0; i < n; i++) {
+    const excess = values[i] - med
+    if (Math.abs(excess) < threshold) continue
+    let peers = 0
+    for (let k = 0; k < n; k++) {
+      const d = values[k] - med
+      if (Math.sign(d) === Math.sign(excess) && Math.abs(d) >= 0.6 * Math.abs(excess)) peers++
+    }
+    if (peers > maxPeers) { recurring++; continue }
+    found.push({ dayIndex: i, value: values[i], excess, score: excess / scale, peers })
+  }
+
+  // One event, one marker: a run of adjacent flagged days — a spike straddling a
+  // weekend, or a payment split over two days — collapses to its extreme day.
+  const outliers = []
+  for (const o of found) {
+    const prev = outliers[outliers.length - 1]
+    if (prev && o.dayIndex - prev.dayIndex <= gap) {
+      if (Math.abs(o.excess) > Math.abs(prev.excess)) outliers[outliers.length - 1] = o
+      continue
+    }
+    outliers.push(o)
+  }
+  return {
+    median: med,
+    scale,
+    z,
+    basis: sparse ? 'events' : 'spread',
+    usualLo: med - threshold,
+    usualHi: med + threshold,
+    outliers,
+    recurring,
+  }
+}
+
+// What is behind an outlier day. `rows` carry SIGNED daily values (an outflow is
+// negative), so a row's movement is directly comparable to the day's.
+//
+// Each row is measured against its OWN normal — its median over the horizon —
+// rather than against the other rows. That's what separates cause from size: a
+// category that only ever moves once (a loan drawdown) is nothing on average and
+// enormous on the day, which is exactly the signal; a category that is always
+// large (payroll) contributes no excess at all on a day it behaves normally.
+// `direction` is the way the plotted day moved, passed in from the scan. A median
+// isn't additive, so the parts' excesses needn't sum to the whole's — on a
+// marginal day that could have the panel explaining a fall while the chart shows
+// a peak. Taking the direction from the series being drawn keeps the two agreed.
+export function attributeOutlier(dayIndex, rows, { minShare = 0.5, direction = null } = {}) {
+  const scored = rows.map((r) => {
+    const value = Number(r.values[dayIndex]) || 0
+    const normal = medianOf(r.values.map((v) => Number(v) || 0))
+    return { ...r, value, normal, excess: value - normal }
+  })
+  // Which way the day moved, and so which rows pushed it there. Rows pulling the
+  // other way didn't cause the spike — they damped it — so they're reported
+  // separately instead of diluting everyone's share.
+  const total = scored.reduce((s, r) => s + r.excess, 0)
+  const dir = direction || (total >= 0 ? 1 : -1)
+  const movers = scored
+    .filter((r) => r.excess * dir > 0)
+    .sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess))
+  const moved = movers.reduce((s, r) => s + r.excess, 0)
+  const withShare = movers.map((r) => ({ ...r, share: moved ? r.excess / moved : 0 }))
+  const against = scored
+    .filter((r) => r.excess * dir < 0)
+    .sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess))
+  // "Materially causing it" is a threshold, not a ranking. The top mover has to
+  // carry most of the day's excess on its own; where several categories each moved
+  // a little there is no single cause, and saying so is the honest answer.
+  const top = withShare[0] ?? null
+  return {
+    total,
+    direction: dir,
+    movers: withShare,
+    against,
+    driver: top && top.share >= minShare ? top : null,
   }
 }
 
@@ -559,6 +837,29 @@ const SUPPLIER_VENDORS = [
 const INV_STATUSES = ['Contracted', 'Expected', 'Recurring', 'Forecast']
 
 export const INVOICE_CODES = new Set(['ARE', 'APE'])
+const INVOICE_SIDE = { ARE: 'AR', APE: 'AP' }
+
+// Whether a cell has an invoice register behind it at all. AR and AP are only
+// invoice-backed for as long as their value dates reach: the Blend and Forecast
+// portions are model output with no invoices under them, and even the category
+// row runs out once every day in the bucket sits past the longest payment terms.
+// Past that point the drill-in shows daily cash flows instead of inventing a
+// counterparty breakdown for cash no invoice has been raised against.
+// The invoice-backed category behind a row, if there is one. `code` is whatever
+// the row was grouped by, so the category sits on `categoryCode` whenever that
+// was something else — grouped by source type, `code` is 'Invoice'/'Blend'/…
+// and the category is a level further down.
+const invoiceCodeOf = (row) => {
+  const code = row.categoryCode ?? row.code
+  return INVOICE_CODES.has(code) ? code : null
+}
+
+function hasInvoicesBehind(row, bucket) {
+  const code = invoiceCodeOf(row)
+  if (!code) return false
+  if (row.sourceType && row.sourceType !== 'Invoice') return false
+  return bucket.dayIndices.some((i) => invoiceSurvival(i, INVOICE_SIDE[code]) > 0)
+}
 
 function hashStr(s) {
   let h = 2166136261
@@ -576,12 +877,12 @@ function hashStr(s) {
 // `dailyValues` are the effective (post-shock) daily amounts for the bucket.
 export function cellUnderlying(row, bucket, dailyValues, days) {
   const total = dailyValues.reduce((s, v) => s + (Number(v) || 0), 0)
-  if (!INVOICE_CODES.has(row.code)) {
+  if (!hasInvoicesBehind(row, bucket)) {
     const cashflows = bucket.dayIndices.map((di, k) => ({ date: days[di], amount: Number(dailyValues[k]) || 0 }))
     return { kind: 'cashflow', total, cashflows }
   }
 
-  const isReceipt = row.code === 'ARE'
+  const isReceipt = invoiceCodeOf(row) === 'ARE'
   const party = isReceipt ? 'Customer' : 'Supplier'
   const roster = isReceipt ? RECEIPT_CUSTOMERS : SUPPLIER_VENDORS
   const prefix = isReceipt ? 'AR' : 'AP'
@@ -638,7 +939,7 @@ export function cellUnderlying(row, bucket, dailyValues, days) {
 // Plausible, deterministic metadata for the model behind a category. Stands in
 // for what a real model registry would return.
 const MODEL_BLURB = {
-  SARIMA: 'Seasonal ARIMA on daily receipts, with weekday and month-end seasonality terms fitted per entity.',
+  SARIMA: 'Seasonal ARIMA on the category’s daily history, with weekday and month-end seasonality terms fitted per entity. Blended behind the ERP’s invoice register, which takes precedence for as long as its value dates reach.',
   'Seasonal Naïve': 'Carries the value from the same point in the previous season forward. A deliberately simple, hard-to-beat baseline.',
   'Holt-Winters': 'Triple exponential smoothing over level, trend and seasonality — responsive to recent shifts without overfitting.',
   'Componentised Payroll Model': 'Builds payroll bottom-up from headcount, contracted salary, employer NI and pension, then lands it on each pay date.',
@@ -646,7 +947,7 @@ const MODEL_BLURB = {
   Chronos: 'Pretrained time-series foundation model, zero-shot over the marketing spend history with a light fine-tune per entity.',
 }
 const MODEL_DRIVERS = {
-  SARIMA: ['Invoice register', 'Customer payment terms', 'Weekday seasonality', 'Month-end effect'],
+  SARIMA: ['Invoice register', 'Counterparty payment terms', 'Weekday seasonality', 'Month-end effect'],
   'Seasonal Naïve': ['Prior-season actuals', 'Calendar alignment'],
   'Holt-Winters': ['Level', 'Trend', 'Seasonal index'],
   'Componentised Payroll Model': ['Headcount', 'Contracted salary', 'Employer NI', 'Pension contributions', 'Pay calendar'],
@@ -789,7 +1090,30 @@ export function makeInitialState(opts = {}) {
     if (i >= 0 && arrays[item.target]) arrays[item.target][i] += item.amount
   }
 
+  // AR and AP reach the grid as three source types that stitch into one
+  // category. `receipts` and `suppliers` above stand for the day's true expected
+  // volume; neither source sees all of it:
+  //   Invoice  — the ERP's register, tapered by the value dates it can produce
+  //   Forecast — SARIMA over the same history, running the full 12 months
+  //   Blend    — the model topping up the share the thinning register misses
+  // Taken after the one-off items, because a one-off dated beyond the longest
+  // payment terms is no more able to be an invoice already on the register than
+  // an ordinary day's volume is.
+  const taper = (arr, side) => arr.map((v, i) => Math.round(v * invoiceSurvival(i, side)))
+  const arInvoice = taper(receipts, 'AR')
+  const apInvoice = taper(suppliers, 'AP')
+  const arKnit = blendInvoiceForecast(arInvoice, sarimaForecast(receipts, (opts.seed ?? 0) ^ 0x5eed01), 'AR')
+  const apKnit = blendInvoiceForecast(apInvoice, sarimaForecast(suppliers, (opts.seed ?? 0) ^ 0x5eed02), 'AP')
+
   const sc = (arr) => (scale === 1 ? arr : arr.map((v) => Math.round(v * scale)))
+  // One category, split only by where its cash came from. Same code, name and
+  // colour on all three, so they collapse back into a single row the moment the
+  // grid is grouped by anything other than source type.
+  const blended = (base, invoice, knit) => [
+    { ...base, id: uid('r'), sourceType: 'Invoice', values: sc(invoice) },
+    { ...base, id: uid('r'), sourceType: 'Blend', values: sc(knit.blend) },
+    { ...base, id: uid('r'), sourceType: 'Forecast', values: sc(knit.forecast) },
+  ]
 
   // Which bank account services each category. Accounts are declared per entity
   // with a role; a category resolves to the account holding that role, falling
@@ -803,17 +1127,27 @@ export function makeInitialState(opts = {}) {
     days,
     accounts,
     // Each category carries: a swatch colour, whether it is modelled (⚡) or
-    // entered manually (👤), the model that forecasts it, and the bank account
-    // its cash moves through.
+    // entered manually (👤), the model that forecasts it, the bank account its
+    // cash moves through, and — where the dimension has been rolled out — the
+    // source the flow came from. Only AR and AP carry a `sourceType` so far, and
+    // they carry three: each is one category stitched together from its ERP
+    // invoices, the model's top-up over the join, and the pure model beyond it.
+    // The rest are left unset rather than defaulted to 'Unknown'.
     inflows: [
-      { id: uid('r'), name: 'Customer Receipts', code: 'ARE', color: '#00c089', values: sc(receipts), modelled: true, model: { name: 'SARIMA', category: 'Statistical' }, account: acct('collections') },
+      ...blended(
+        { name: 'Customer Receipts', code: 'ARE', color: '#00c089', modelled: true, model: { name: 'SARIMA', category: 'Statistical' }, account: acct('collections') },
+        arInvoice, arKnit,
+      ),
       { id: uid('r'), name: 'Loan Drawdown', code: 'ARI', color: '#0078ff', values: sc(loan), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' }, account: acct('financing') },
       { id: uid('r'), name: 'Other Income', code: 'AREX', color: '#16bba4', values: sc(otherInc), modelled: true, model: { name: 'Holt-Winters', category: 'Statistical' }, account: acct('operating') },
     ],
     outflows: [
       { id: uid('r'), name: 'Payroll', code: 'SALARIES', color: '#ff9600', values: sc(payroll), modelled: true, model: { name: 'Componentised Payroll Model', category: 'Custom R&D' }, account: acct('payroll') },
       { id: uid('r'), name: 'Rent & Facilities', code: 'PAIT', color: '#b849ff', values: sc(rent), modelled: true, model: { name: 'Seasonal Naïve', category: 'Statistical' }, account: acct('operating') },
-      { id: uid('r'), name: 'Suppliers', code: 'APE', color: '#de4383', values: sc(suppliers), modelled: true, model: { name: 'XGBoost', category: 'ML/AI' }, account: acct('payables') },
+      ...blended(
+        { name: 'Suppliers', code: 'APE', color: '#de4383', modelled: true, model: { name: 'SARIMA', category: 'Statistical' }, account: acct('payables') },
+        apInvoice, apKnit,
+      ),
       { id: uid('r'), name: 'Marketing', code: 'APIX', color: '#ffd621', values: sc(marketing), modelled: true, model: { name: 'Chronos', category: 'ML/AI' }, account: acct('payables') },
       { id: uid('r'), name: 'Tax & VAT', code: 'TAX', color: '#858585', values: sc(tax), modelled: false, model: null, account: acct('operating') },
     ],

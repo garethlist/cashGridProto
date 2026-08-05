@@ -36,6 +36,9 @@ export default function ForecastTable({
   groupChain,
   onGroupChain,
   groupDisabled,
+  chartStack,
+  onChartStack,
+  litRow,
   underlyingCell,
   gridMode = 'base',
   shockRanges = {},
@@ -60,7 +63,10 @@ export default function ForecastTable({
   const selected = new Set((selection ?? []).map((s) => `${s.section}:${s.id}`))
   // Only leaf rows can be selected — a drill-down parent would double-count the
   // children sitting under it.
-  const leafIds = (rows) => rows.filter((r) => !r.hasChildren && !r.synthetic).map((r) => r.id)
+  // Leaves only — a drill-down parent would double-count its own children. Roll-up
+  // leaves count: in most chains the deepest level is a roll-up, and excluding them
+  // left Select all with nothing to select.
+  const leafIds = (rows) => rows.filter((r) => !r.hasChildren).map((r) => r.id)
 
   // a row hides if its section is collapsed or any ancestor group is closed
   const groupHidden = (row) => {
@@ -97,6 +103,8 @@ export default function ForecastTable({
                 onChain={onGroupChain}
                 disabled={groupDisabled}
                 onOpenChange={setGroupMenuOpen}
+                chartStack={chartStack}
+                onChartStack={onChartStack}
               />
             </span>
           </th>
@@ -180,6 +188,7 @@ export default function ForecastTable({
               readOnly={readOnly}
               focused={selected.has(`inflows:${row.id}`)}
               singleFocus={singleFocus}
+              lit={litRow === row.id}
               canShock={canShock}
               onFocus={() => onFocus('inflows', row)}
               onAddShock={onAddShock}
@@ -222,6 +231,7 @@ export default function ForecastTable({
               readOnly={readOnly}
               focused={selected.has(`outflows:${row.id}`)}
               singleFocus={singleFocus}
+              lit={litRow === row.id}
               canShock={canShock}
               onFocus={() => onFocus('outflows', row)}
               onAddShock={onAddShock}
@@ -328,10 +338,11 @@ const GROUPINGS = [
   { id: 'currency', label: 'Currency', hint: 'One row per source currency' },
   { id: 'bankAccount', label: 'Bank account', hint: 'One row per bank account' },
   { id: 'cashPool', label: 'Cash pool', hint: 'Accounts grouped into their pool' },
+  { id: 'sourceType', label: 'Source type', hint: 'Where the flow came from' },
   { id: 'counterparty', label: 'Counterparty', hint: 'Coming soon', soon: true },
 ]
 
-function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disabled = {}, onOpenChange }) {
+function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disabled = {}, onOpenChange, chartStack = true, onChartStack }) {
   const [open, setOpen] = useState(false)
   // Drag-to-reorder state for the drill-down levels: the level being dragged and
   // the one it's hovering over (for the drop indicator).
@@ -430,25 +441,22 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
                 const dragging = dragId === id
                 const draggable = inChain && live.length > 1
                 return (
+                  /* The whole row is the drag handle, not just the grip — the
+                     grip stays as the affordance. A click that didn't turn into
+                     a drag still falls through to the button below. */
                   <span
                     key={id}
-                    className={`grouprow ${inChain ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''} ${dragging ? 'grouprow--dragging' : ''} ${overId === id && dragId && !dragging ? 'grouprow--drop' : ''}`}
+                    className={`grouprow ${inChain ? 'grouprow--on' : ''} ${off ? 'grouprow--soon' : ''} ${draggable ? 'grouprow--draggable' : ''} ${dragging ? 'grouprow--dragging' : ''} ${overId === id && dragId && !dragging ? 'grouprow--drop' : ''}`}
+                    draggable={draggable}
+                    onDragStart={draggable ? (e) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id) } : undefined}
+                    onDragEnd={draggable ? () => { setDragId(null); setOverId(null) } : undefined}
                     onDragOver={draggable && dragId && !dragging ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverId(id) } : undefined}
                     onDragLeave={draggable ? () => setOverId((o) => (o === id ? null : o)) : undefined}
                     onDrop={draggable ? (e) => { e.preventDefault(); reorder(e.dataTransfer.getData('text/plain') || dragId, id); setDragId(null); setOverId(null) } : undefined}
                   >
                     {draggable && (
-                      <span
-                        className="grouprow__grip"
-                        draggable
-                        onDragStart={(e) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id) }}
-                        onDragEnd={() => { setDragId(null); setOverId(null) }}
-                        role="button"
-                        tabIndex={-1}
-                        title="Drag to reorder levels"
-                        aria-label={`Reorder ${g.label}`}
-                      >
-                        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden>
+                      <span className="grouprow__grip" title="Drag anywhere on this row to reorder" aria-hidden>
+                        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
                           <circle cx="6" cy="4" r="1.3" /><circle cx="10" cy="4" r="1.3" />
                           <circle cx="6" cy="8" r="1.3" /><circle cx="10" cy="8" r="1.3" />
                           <circle cx="6" cy="12" r="1.3" /><circle cx="10" cy="12" r="1.3" />
@@ -491,6 +499,35 @@ function GroupingPicker({ multi, onMulti, single, onSingle, chain, onChain, disa
                   </button>
                 )
               })}
+
+          {/* The chart follows the chain's first two levels, so the switch for it
+              belongs with the levels rather than out on the chart. Only offered
+              when there are two levels running for it to act on. */}
+          {multi && applied.length > 1 && (
+            <button
+              className={`groupstack ${chartStack ? 'groupstack--on' : ''}`}
+              role="switch"
+              aria-checked={chartStack}
+              onClick={() => onChartStack?.(!chartStack)}
+              title={
+                chartStack
+                  ? `Selecting a ${labelOf(applied[0])} row splits it by ${labelOf(applied[1])} on the chart — click to turn off`
+                  : 'Selected rows chart as a single net flow line — click to split them on the chart'
+              }
+            >
+              <span className="groupstack__box" aria-hidden>
+                {chartStack && (
+                  <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 6.5 4.8 9.2 10 3.4" />
+                  </svg>
+                )}
+              </span>
+              <span className="groupstack__main">
+                <span className="groupstack__label">Stack on chart</span>
+                <span className="groupstack__hint">A {labelOf(applied[0]).toLowerCase()} row splits by {labelOf(applied[1]).toLowerCase()}</span>
+              </span>
+            </button>
+          )}
 
           {multi && <span className="grouppick__summary">{summary}</span>}
         </span>
@@ -596,25 +633,27 @@ function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, valu
   )
 }
 
-function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, singleFocus, canShock, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
+function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, singleFocus, lit, canShock, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
   // Grouped rows (e.g. by currency) are roll-ups, not categories: they have no
   // model behind them, no name to edit and nothing to shock.
   const synthetic = !!row.synthetic
-  const shocksMode = gridMode === 'shocks' && !synthetic
-  // A shock lands on one category of one company, so the per-cell shock controls
-  // need the selection narrowed to this row alone — and a grid that can take a
-  // shock at all (not an account/pool cut).
-  const shockable = focused && singleFocus && canShock
-  // Shocks mode: clicking anywhere on the row drills into it — except on
+  // Row mode does two jobs, and they don't have the same reach. Anything the grid
+  // draws can go on the chart, roll-ups included — that's how a drill-down level
+  // gets charted, and how the chart composition finds a parent to split. Shocks
+  // are narrower: they're written back to one category of one company, so a
+  // roll-up has nowhere to put them.
+  const rowMode = gridMode === 'shocks'
+  const shockable = focused && singleFocus && canShock && !synthetic
+  // Row mode: clicking anywhere on the row drills into it — except on
   // interactive controls (the name field, cell inputs, and the row buttons).
   const onRowClick = (e) => {
-    if (!shocksMode) return
+    if (!rowMode) return
     if (e.target.closest('input, textarea, select, button, a')) return
     onFocus()
   }
   return (
     <tr
-      className={`grid__row grid__row--item ${focused ? 'grid__row--focused' : ''} ${hidden ? 'grid__row--hidden' : ''}`}
+      className={`grid__row grid__row--item ${focused ? 'grid__row--focused' : ''} ${lit ? 'grid__row--lit' : ''} ${hidden ? 'grid__row--hidden' : ''}`}
       onClick={onRowClick}
       aria-hidden={hidden || undefined}
     >
@@ -674,7 +713,7 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
               </span>
             </button>}
           </span>
-          {shocksMode && (
+          {rowMode && (
             /* The row is a selection toggle now, not a drill-in, so it carries the
                same tickbox as the section's Select all — right-aligned, so the
                boxes read as one column down the label gutter. */
