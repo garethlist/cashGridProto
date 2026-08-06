@@ -1707,9 +1707,14 @@ body {
 .chart__line--muted { stroke-opacity: 0.4; }
 .chart__scenario { fill: none; stroke-width: 1.8; stroke-linejoin: round; opacity: 0.9; }
 .chart__banderr { stroke: none; fill-opacity: 0.13; }
-.chart__marker { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
-.chart__guide { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
-.chart__hoverdot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+/* The bucket dots, the hover guide and the hover dot are all decoration — none
+   of them is clickable. The hover dot in particular tracks the pointer and is
+   painted after the outlier rings, so left hit-testable it lands under your
+   cursor exactly as you go to click a ring and swallows the click (it's a
+   sibling of the ring's group, so the event never reaches it). */
+.chart__marker { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; pointer-events: none; }
+.chart__guide { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; pointer-events: none; }
+.chart__hoverdot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; pointer-events: none; }
 
 /* --- outlier markers ------------------------------------------------------ */
 /* A ring on the line at each flagged day. The hit disc is twice the ring's
@@ -1733,6 +1738,15 @@ body {
 }
 .chart__outlier:hover .chart__outlier-ring,
 .chart__outlier:focus-visible .chart__outlier-ring { r: 8px; }
+/* Keyboard focus has to be distinguishable from hover, and growing the ring is
+   all hover does. So focus also stills the pulse and puts a high-contrast collar
+   on the halo — the deeper ink, since the bright --outlier only manages 2.5:1. */
+.chart__outlier:focus-visible .chart__outlier-halo {
+  animation: none;
+  fill: color-mix(in srgb, var(--outlier) 34%, transparent);
+  stroke: var(--outlier-ink);
+  stroke-width: 2;
+}
 /* the one being drilled into fills in, so the panel and the chart agree */
 .chart__outlier--on .chart__outlier-ring { fill: var(--outlier); stroke-width: 2.5; }
 .chart__outlier--on .chart__outlier-halo { animation: none; fill: color-mix(in srgb, var(--outlier) 30%, transparent); }
@@ -3006,6 +3020,9 @@ body {
 /* ---- outlier drill-in drawer -------------------------------------------- */
 /* Same right-hand dock and flat frame as the underlying-detail drawer; the two
    are alternative answers to "what is behind this number" and never coexist. */
+/* The panel takes focus when it opens (see OutlierPanel), and it's a container
+   rather than a control — so no focus ring on the frame itself. */
+.outpanel:focus { outline: none; }
 .outpanel {
   position: fixed; top: 0; right: 0; height: 100%;
   width: 460px; max-width: 96vw;

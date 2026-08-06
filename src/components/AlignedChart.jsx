@@ -474,6 +474,11 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
               onClick={() => onOutlierClick && onOutlierClick(o.dayIndex)}
               role="button"
               tabIndex={0}
+              // The <title> below is the pointer tooltip, and would otherwise also
+              // be the accessible name — which would tell a keyboard user to click.
+              aria-label={`Outlier · ${longDate(days[o.dayIndex])} — open the day's breakdown`}
+              aria-expanded={on}
+              aria-controls="outlier-panel"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOutlierClick && onOutlierClick(o.dayIndex) }
               }}

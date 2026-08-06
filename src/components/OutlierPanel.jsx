@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useMoney } from '../currency.jsx'
 import { longDate } from '../model.js'
 import OutlierIcon from './OutlierIcon.jsx'
@@ -22,8 +23,35 @@ export default function OutlierPanel({
   const offsets = against.filter((r) => Math.abs(r.excess) > Math.abs(detail?.total ?? 0) * 0.1)
   const up = (detail?.direction ?? 1) > 0
 
+  // Opening the panel from the chart has to take focus with it, or a keyboard
+  // user presses Enter on a ring and is left standing on the ring — with the
+  // panel's own controls somewhere further down the tab order, unannounced.
+  // Closing hands focus back to whatever opened it, which is that same ring.
+  const panelRef = useRef(null)
+  const returnRef = useRef(null)
+  useEffect(() => {
+    if (open) {
+      returnRef.current = document.activeElement
+      panelRef.current?.focus()
+      return
+    }
+    const back = returnRef.current
+    returnRef.current = null
+    // The ring is only in the DOM while outlier mode is on, so check before
+    // reaching for it — otherwise focus lands nowhere and drops to the body.
+    if (back && document.body.contains(back)) back.focus()
+  }, [open])
+
   return (
-    <aside className={`outpanel ${open ? 'outpanel--open' : ''}`} aria-hidden={!open}>
+    <aside
+      id="outlier-panel"
+      ref={panelRef}
+      tabIndex={-1}
+      role="region"
+      aria-label="Outlier detail"
+      className={`outpanel ${open ? 'outpanel--open' : ''}`}
+      aria-hidden={!open}
+    >
       {day && scan && detail && (
         <>
           <header className="outpanel__head">
