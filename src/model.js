@@ -854,11 +854,15 @@ const invoiceCodeOf = (row) => {
   return INVOICE_CODES.has(code) ? code : null
 }
 
-function hasInvoicesBehind(row, bucket) {
+// The register is dated from the forecast start (today), not from the first day on
+// the grid: six months of actuals now sit ahead of it, so survival is measured from
+// today. Actual days count as fully invoiced — those are the paid invoices.
+export const FORECAST_START_ISO = '2026-07-01'
+function hasInvoicesBehind(row, bucket, offset = 0) {
   const code = invoiceCodeOf(row)
   if (!code) return false
   if (row.sourceType && row.sourceType !== 'Invoice') return false
-  return bucket.dayIndices.some((i) => invoiceSurvival(i, INVOICE_SIDE[code]) > 0)
+  return bucket.dayIndices.some((i) => i < offset || invoiceSurvival(i - offset, INVOICE_SIDE[code]) > 0)
 }
 
 function hashStr(s) {
@@ -877,7 +881,8 @@ function hashStr(s) {
 // `dailyValues` are the effective (post-shock) daily amounts for the bucket.
 export function cellUnderlying(row, bucket, dailyValues, days) {
   const total = dailyValues.reduce((s, v) => s + (Number(v) || 0), 0)
-  if (!hasInvoicesBehind(row, bucket)) {
+  const offset = Math.max(0, (days || []).indexOf(FORECAST_START_ISO))
+  if (!hasInvoicesBehind(row, bucket, offset)) {
     const cashflows = bucket.dayIndices.map((di, k) => ({ date: days[di], amount: Number(dailyValues[k]) || 0 }))
     return { kind: 'cashflow', total, cashflows }
   }

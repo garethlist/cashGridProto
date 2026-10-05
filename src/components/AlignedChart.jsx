@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import { useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react'
 import { longDate, bandFraction } from '../model.js'
 import { useMoney } from '../currency.jsx'
 import ShockIcon from './ShockIcon.jsx'
@@ -10,9 +10,10 @@ import FinderIcon from './FinderIcon.jsx'
 // When `stack` is set the chart draws a composition instead of lines: one row
 // split into its children as stacked areas, daily like everything else here. It
 // takes over the y-domain, since it replaces the lines rather than joining them.
-export default function AlignedChart({ days, lines, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover }) {
+export default function AlignedChart({ days, lines, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover, todayIndex = null }) {
   const svgRef = useRef(null)
   const [hover, setHover] = useState(null)
+  const [snapToday, setSnapToday] = useState(false) // pointer is on the Today line
   const { compact } = useMoney()
 
   // A live hover always wins; when the pointer is away we fall back to the
@@ -108,7 +109,56 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
     return { lo, hi, yScale, dayX, ticks, hasNeg, zeroInRange, flat }
   }, [days, lines, stack, bands, buckets, labelW, colW, plotBottom, plotH])
 
-  const { yScale, dayX, ticks, hasNeg, zeroInRange, flat } = geom
+  // Days, weeks and months are one daily series on a re-scaled x axis, so a
+  // granularity change morphs every point from its old x to its new one — the
+  // axis zooms rather than the chart being redrawn.
+  const [morphX, setMorphX] = useState(null)
+  const prevXRef = useRef(null)
+  const shownXRef = useRef(null)
+  const rafRef = useRef(0)
+  useLayoutEffect(() => {
+    const next = geom.dayX
+    const prev = shownXRef.current || prevXRef.current
+    prevXRef.current = next
+    if (!prev || prev.length !== next.length) return
+    const n = next.length
+    if (Math.abs(prev[n - 1] - next[n - 1]) < 4 && Math.abs(prev[0] - next[0]) < 4) return
+    cancelAnimationFrame(rafRef.current)
+    const from = prev.slice()
+    const t0 = performance.now()
+    const D = 720
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+    const step = (now) => {
+      const t = Math.min(1, (now - t0) / D)
+      const e = ease(t)
+      if (t < 1) {
+        const x = new Array(n)
+        for (let i = 0; i < n; i++) x[i] = from[i] + (next[i] - from[i]) * e
+        shownXRef.current = x
+        setMorphX(x)
+        rafRef.current = requestAnimationFrame(step)
+      } else {
+        shownXRef.current = null
+        setMorphX(null)
+      }
+    }
+    setHover(null)
+    rafRef.current = requestAnimationFrame(step)
+  }, [geom.dayX])
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  const morphing = morphX != null
+  const { yScale, ticks, hasNeg, zeroInRange, flat } = geom
+  const dayX = morphX || geom.dayX
+  // x of the boundary between the last actual day and the first forecast day
+  // left edge of today's slot in its column — the same x the grid's today rule uses
+  const todayX = (() => {
+    if (todayIndex == null || todayIndex <= 0 || dayX[todayIndex] == null) return null
+    const b = buckets.find((bk) => bk.dayIndices.includes(todayIndex))
+    if (!b) return null
+    // exact column boundary when today opens a period, so it sits on the period's start line
+    const pos = b.dayIndices.indexOf(todayIndex)
+    return labelW + b.index * colW + (pos / b.dayIndices.length) * colW
+  })()
 
   // Bring a singled-out day into view — the low point, or an outlier stepped to
   // with the panel's arrows, often sits off-screen in the horizontally scrolling
@@ -172,10 +222,31 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
 
   const y0 = yScale(0)
 
+  // The column splitter sits over the divider, which is exactly where Today lands
+  // when it opens the window — so the snap is also tracked at document level and
+  // still fires with the splitter (one unified line) under the pointer.
+  useEffect(() => {
+    if (todayX == null) return undefined
+    const onDoc = (e) => {
+      const svg = svgRef.current
+      if (!svg || morphing) return
+      const r = svg.getBoundingClientRect()
+      const inY = e.clientY >= r.top && e.clientY <= r.bottom
+      const near = inY && Math.abs(e.clientX - (r.left + todayX)) <= 14
+      if (near) { setSnapToday(true); setHover(todayIndex) }
+      else if (snapToday && !svg.contains(e.target)) { setSnapToday(false); setHover(null) }
+    }
+    document.addEventListener('mousemove', onDoc, { passive: true })
+    return () => document.removeEventListener('mousemove', onDoc)
+  }, [todayX, todayIndex, snapToday, morphing])
+
   const onMove = (e) => {
     const svg = svgRef.current
-    if (!svg) return
+    if (!svg || morphing) return
     const mx = e.clientX - svg.getBoundingClientRect().left
+    // the Today line is a hover target of its own: near it, the readout snaps to today
+    if (todayX != null && Math.abs(mx - todayX) <= 14) { setSnapToday(true); setHover(todayIndex); return }
+    if (snapToday) setSnapToday(false)
     let best = 0
     let bestD = Infinity
     for (let i = 0; i < dayX.length; i++) {
@@ -185,13 +256,19 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
         best = i
       }
     }
-    setHover(best)
+    // period ends are magnetic: within a short reach the readout snaps to the closing day
+    const reach = Math.min(16, Math.max(6, colW * 0.22))
+    for (const b of buckets) {
+      const end = b.dayIndices[b.dayIndices.length - 1]
+      if (dayX[end] != null && Math.abs(dayX[end] - mx) <= reach) { best = end; break }
+    }
+    if (best !== hover) setHover(best)
   }
 
   const bucketOf = (i) => buckets.find((b) => b.dayIndices.includes(i))
 
   const activeBucket = activeDay != null ? bucketOf(activeDay) : null
-  const guideX = activeDay == null ? null : dayX[activeDay]
+  const guideX = activeDay == null ? null : snapToday && todayX != null ? todayX : dayX[activeDay]
 
   // Bands of a single hue need more separation than opacity alone provides. The
   // fill steps down in lightness across the whole ramp, mixed toward the panel
@@ -304,11 +381,11 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
       <div className="chart__plot" style={{ position: 'relative', height }}>
       <svg
         ref={svgRef}
-        className="chart__svg"
+        className={`chart__svg ${morphing ? 'chart__svg--morph' : ''}`}
         width={contentW}
         height={height}
         onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onMouseLeave={() => { setHover(null); setSnapToday(false) }}
         onClick={stack ? onPlotClick : undefined}
       >
         <defs>
@@ -331,6 +408,16 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
                 </pattern>
               ) : null
             )}
+          <linearGradient id="areaFillPast" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" style={{ stopColor: 'var(--muted)', stopOpacity: 0.22 }} />
+            <stop offset="100%" style={{ stopColor: 'var(--muted)', stopOpacity: 0.02 }} />
+          </linearGradient>
+          {todayX != null && (
+            <>
+              <clipPath id="clipActual"><rect x="0" y="0" width={Math.max(0, todayX)} height={height} /></clipPath>
+              <clipPath id="clipForecast"><rect x={todayX} y="0" width={Math.max(0, contentW - todayX)} height={height} /></clipPath>
+            </>
+          )}
         </defs>
 
         {/* alternating column bands, one per table column */}
@@ -389,7 +476,13 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
         ))}
 
         {/* area-to-zero fill under the primary line (when bands are off) */}
-        {areaPath && <path className="chart__area" style={{ fill: 'url(#areaFill)' }} d={areaPath} />}
+        {areaPath && todayX == null && <path className="chart__area" style={{ fill: 'url(#areaFill)' }} d={areaPath} />}
+        {areaPath && todayX != null && (
+          <>
+            <path className="chart__area" clipPath="url(#clipActual)" style={{ fill: 'url(#areaFillPast)' }} d={areaPath} />
+            <path className="chart__area" clipPath="url(#clipForecast)" style={{ fill: 'url(#areaFill)' }} d={areaPath} />
+          </>
+        )}
 
         {/* composition: one row split into its children, stacked from zero —
             tone, then texture over it, then a hairline on every boundary. */}
@@ -426,19 +519,31 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
         ))}
 
         {/* the line(s) — emphasised line bold, muted lines thin & faint */}
-        {linePaths.map((ln) => (
-          <path
-            key={`line-${ln.id}`}
-            className="chart__line"
-            style={{
-              stroke: ln.color,
-              strokeWidth: ln.prominent ? 1.5 : ln.muted ? 1 : 1.25,
-              strokeOpacity: ln.muted ? 0.4 : 1,
-              strokeDasharray: ln.dash ? '6 4' : undefined,
-            }}
-            d={ln.d}
-          />
+        {/* actuals solid up to today; the forecast beyond it lighter and dashed */}
+        {[['actual', 'url(#clipActual)'], ['forecast', 'url(#clipForecast)']].map(([part, clip]) => (
+          <g key={part} clipPath={todayX != null ? clip : undefined} className={`chart__part chart__part--${part}`}>
+            {(todayX != null || part === 'actual') && linePaths.map((ln) => (
+              <path
+                key={`line-${part}-${ln.id}`}
+                className="chart__line"
+                style={{
+                  // actuals read as settled history in grey; the forecast carries the series colour, solid
+                  stroke: part === 'actual' && todayX != null ? 'var(--muted)' : ln.color,
+                  strokeWidth: ln.prominent ? 1.5 : ln.muted ? 1 : 1.25,
+                  strokeOpacity: ln.muted ? 0.4 : 1,
+                  strokeDasharray: ln.dash ? '6 4' : undefined,
+                }}
+                d={ln.d}
+              />
+            ))}
+          </g>
         ))}
+        {todayX != null && (
+          <g className={`chart__today ${snapToday ? 'chart__today--hot' : ''}`} pointerEvents="none">
+            <line x1={todayX} x2={todayX} y1={plotTop} y2={plotBottom} shapeRendering="crispEdges" />
+            <text x={todayX + 6} y={plotTop + 10}>Today</text>
+          </g>
+        )}
 
         {/* markers at each bucket's closing day, on the emphasised line */}
         {markers &&
@@ -504,7 +609,7 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
         {activeDay != null && (
           <g>
             <line
-              className={`chart__guide ${showPinned ? 'chart__guide--pinned' : ''}`}
+              className={`chart__guide ${showPinned ? 'chart__guide--pinned' : ''} ${snapToday ? 'chart__guide--today' : ''}`}
               x1={guideX}
               y1={plotTop}
               x2={guideX}
@@ -597,7 +702,7 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
 
       {activeDay != null && !stack && (
         <HoverTip
-          x={dayX[activeDay]}
+          x={snapToday && todayX != null ? todayX : dayX[activeDay]}
           contentW={contentW}
           labelW={labelW}
           iso={days[activeDay]}
@@ -612,8 +717,8 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
           }))}
           net={dailyNet[activeDay]}
           bucket={bucketOf(activeDay)}
-          found={showPinned}
-          foundLabel={pinnedLabel}
+          found={showPinned || snapToday}
+          foundLabel={snapToday ? 'Today' : pinnedLabel}
         />
       )}
       </div>
