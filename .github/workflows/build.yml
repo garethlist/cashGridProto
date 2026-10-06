@@ -9,9 +9,19 @@ on:
 permissions:
   contents: read
 
+# Folder in uniun-technology/prototypes-published, served at
+# https://prototypes.hub.uniun.io/<PROTOTYPE_NAME>/ (VPN only, #13600)
+env:
+  PROTOTYPE_NAME: cash-grid
+
+# Newer pushes supersede in-flight runs, so publishes can't race each other.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: hub-aks-agents
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,3 +36,24 @@ jobs:
           name: cashgrid-single-file
           path: artifact.html
           if-no-files-found: error
+      - uses: actions/checkout@v4
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          repository: uniun-technology/prototypes-published
+          token: ${{ secrets.PROTOTYPES_PUBLISH_TOKEN }}
+          path: published
+      - name: Publish to prototypes-published
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p "published/$PROTOTYPE_NAME"
+          cp prototype.html "published/$PROTOTYPE_NAME/index.html"
+          cd published
+          git add "$PROTOTYPE_NAME/index.html"
+          if git diff --cached --quiet; then
+            echo "No change to publish"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Publish $PROTOTYPE_NAME from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}"
+          git push
