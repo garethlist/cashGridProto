@@ -142,21 +142,19 @@ Actions workflow, which uploads it as a downloadable run artifact.
 
 ## Live demo
 
-Every push to `main` deploys to **Azure Static Web Apps** — this is the link to
-share:
-<https://salmon-smoke-0d6197c10.7.azurestaticapps.net/>
+Every push to `main` publishes the prototype internally, behind the NetBird VPN:
+<https://prototypes.hub.uniun.io/cash-grid/>
 
-Built and published by
-[`azure-static-web-apps-salmon-smoke-0d6197c10`](.github/workflows/azure-static-web-apps-salmon-smoke-0d6197c10.yml),
-which builds `dist/` on Node 20 and uploads it with `skip_app_build`. Pull
-requests get their own preview environment from the same workflow.
+The [`build`](.github/workflows/build.yml) workflow runs `npm run bundle`, then
+commits `prototype.html` (the same bundle as `artifact.html`, wrapped as a full
+HTML document) to
+[`uniun-technology/prototypes-published`](https://github.com/uniun-technology/prototypes-published)
+as `cash-grid/index.html`. The Hub cluster picks it up within about a minute.
+Pushing needs the `PROTOTYPES_PUBLISH_TOKEN` repository secret. See
+[#13600](https://dev.azure.com/uniun/Uniun/_workitems/edit/13600).
 
-The [`deploy-pages`](.github/workflows/deploy.yml) workflow also publishes to
-**GitHub Pages** on the same trigger:
-<https://garethlist.github.io/cashGridProto/>
-
-(Pages needs enabling once — *Settings → Pages → Build and deployment → Source:
-GitHub Actions* — and stays 404 while the repository is private.)
+The prototype is not published publicly. The earlier Azure Static Web Apps and
+GitHub Pages deployments have been removed.
 
 ## Project structure
 
@@ -172,7 +170,7 @@ GitHub Actions* — and stays 404 while the repository is private.)
 | `src/components/UnderlyingPanel.jsx` | Base-mode underlying-data drawer (invoices / daily cash flows) |
 | `src/components/ShockIcon.jsx`, `CategoryTag.jsx` | Shock spike icon; model-category tag |
 | `src/index.css` | Styling, theme variables, alignment/sticky rules |
-| `inline.mjs` | Inlines the Vite build into a single `artifact.html` |
+| `inline.mjs` | Inlines the Vite build into a single `artifact.html`, plus `prototype.html` as a full HTML document |
 | `scripts/export-data.mjs` | Builds every grid headlessly and dumps all test data as sheet descriptions |
 | `scripts/build-workbook.py` | Formats that dump into `export/Cash Forecast Grid - test data.xlsx` |
 | `scripts/check-scopes.mjs` | Reconciliation check: account and pool cuts add back to their company and to GROUP |

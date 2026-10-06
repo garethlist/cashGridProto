@@ -16,3 +16,21 @@ const out = `<style>\n${css}\n</style>\n<div id="root"></div>\n<script type="mod
 const target = join(process.cwd(), 'artifact.html')
 writeFileSync(target, out, 'utf8')
 console.log(`Wrote ${target} (${(out.length / 1024).toFixed(1)} kB)`)
+
+// Full standalone document for internal hosting at prototypes.hub.uniun.io (#13600).
+// Same body as the artifact, wrapped so browsers render in standards mode.
+const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cash Forecast</title>
+</head>
+<body>
+${out}</body>
+</html>
+`
+
+const pageTarget = join(process.cwd(), 'prototype.html')
+writeFileSync(pageTarget, page, 'utf8')
+console.log(`Wrote ${pageTarget} (${(page.length / 1024).toFixed(1)} kB)`)
