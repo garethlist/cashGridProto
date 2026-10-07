@@ -150,8 +150,35 @@ function applyEurSweep(states) {
 
 // Build every entity's dataset, then overlay the EUR sweep so the pool's legs are
 // present and reconcile. This is the app's source of truth for entity data.
+export const TODAY_ISO = '2026-07-01'
+export const HISTORY_FROM_ISO = '2026-01-01'
+
+// Six months of actuals ahead of today. The forecast model only runs forward, so
+// history is struck from the opening half-year with a per-day variance applied
+// uniformly across every row and entity — which keeps sweeps zero-balancing and
+// the group reconciling. Each entity's configured opening is its 1 Jan position.
+function withHistory(states) {
+  const any = Object.values(states)[0]
+  const H = Math.round((Date.parse(TODAY_ISO) - Date.parse(HISTORY_FROM_ISO)) / 86400000)
+  const hDays = []
+  for (let i = 0; i < H; i++) hDays.push(new Date(Date.parse(HISTORY_FROM_ISO) + i * 86400000).toISOString().slice(0, 10))
+  let seed = 0x5eed1234
+  const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
+  const f = hDays.map((_, i) => 0.86 + 0.08 * Math.sin(i / 17) + rnd() * 0.12) // actuals ran a touch under the current trend
+  const D = any.days.length
+  for (const st of Object.values(states)) {
+    const hist = (r) => f.map((k, i) => (Number(r.values[i % D]) || 0) * k)
+    let net = 0
+    st.inflows = st.inflows.map((r) => { const h = hist(r); net += h.reduce((s, x) => s + x, 0); return { ...r, values: [...h, ...r.values] } })
+    st.outflows = st.outflows.map((r) => { const h = hist(r); net -= h.reduce((s, x) => s + x, 0); return { ...r, values: [...h, ...r.values] } })
+    st.days = [...hDays, ...st.days]
+    st.todayIndex = H
+    // the configured opening now stands on 1 Jan; the half-year of actuals carries it into today
+  }
+  return states
+}
 export function buildEntityStates() {
-  return applyEurSweep(Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)])))
+  return withHistory(applyEurSweep(Object.fromEntries(ENTITIES.map((e) => [e.id, makeEntity(e)]))))
 }
 
 // ---- grid views -------------------------------------------------------------
@@ -177,6 +204,17 @@ export const VIEW_DIMS = [
 ]
 export const acctTab = (id) => `acct:${id}`
 export const poolTab = (id) => `pool:${id}`
+
+// Navigation dimensions: every way an account can be grouped on a route. A
+// route is an ordering of these, always ending at the bank account; any node
+// along it is a loadable grid (a "cut" when it isn't a native company/pool).
+export const NAV_DIMS = {
+  company: { label: 'Company', noun: ['company', 'companies'], val: (a) => a.entityId, name: (a) => a.company, code: (a) => ENTITIES.find((e) => e.id === a.entityId)?.currency ?? '' },
+  ccy: { label: 'Currency', noun: ['currency', 'currencies'], val: (a) => a.currency, name: (a) => a.currency },
+  pool: { label: 'Cash pool', noun: ['cash pool', 'cash pools'], val: (a) => a.pool || 'none', name: (a) => (a.pool ? CASH_POOLS[a.pool]?.name ?? a.pool : 'Not pooled') },
+  bank: { label: 'Bank', noun: ['bank', 'banks'], val: (a) => a.bank, name: (a) => a.bank },
+}
+export const cutTab = (filters) => 'cut:' + filters.map(([d, val]) => `${d}=${encodeURIComponent(val)}`).join(';')
 
 // Converter from one entity's currency into a grid's display currency. Identity
 // when they're the same rather than a round-trip through the base: (v / 1.17) *
@@ -219,10 +257,13 @@ export function accountBalances(states, view, displayCurrency, mode = 'opening')
     // movement is held aside rather than silently dropped.
     const moves = {}
     let loose = 0
-    if (closing) {
+    // 'opening' is today's position: with actuals ahead of today, that's the 1 Jan
+    // balance carried through every actual day. 'closing' runs the whole horizon.
+    const upto = closing ? Infinity : (st.todayIndex || 0)
+    if (closing || upto > 0) {
       const walk = (rows, sign) => {
         for (const r of rows) {
-          const total = r.values.reduce((s, v) => s + (Number(v) || 0), 0) * sign
+          const total = r.values.slice(0, upto === Infinity ? undefined : upto).reduce((s, v) => s + (Number(v) || 0), 0) * sign
           const k = r.account?.id
           if (k) moves[k] = (moves[k] ?? 0) + total
           else loose += total
@@ -232,11 +273,17 @@ export function accountBalances(states, view, displayCurrency, mode = 'opening')
       walk(st.outflows, -1)
     }
 
-    for (const a of e.accounts) {
+    // Today's opening is one entity position split by the same account weights as 1 Jan
+    // (actuals aren't modelled per account), so every account holds a slice of it.
+    const todaySplit = !closing && upto > 0
+    const entityToday = todaySplit ? (Number(st.openingBalance) || 0) + Object.values(moves).reduce((s, x) => s + x, 0) + loose : 0
+    const weights = e.accounts.map((x) => (x.openShare != null ? x.openShare : 1))
+    const wSum = weights.reduce((s, w) => s + w, 0) || 1
+    for (const [ai, a] of e.accounts.entries()) {
       if (view.accountIds && !view.accountIds.has(a.id)) continue
       const open = opens[a.id] ?? 0
-      const move = closing ? moves[a.id] ?? 0 : 0
-      const local = open + move
+      const move = todaySplit ? 0 : moves[a.id] ?? 0
+      const local = todaySplit ? entityToday * (weights[ai] / wSum) : open + move
       out.push({
         ...a,
         entityId: e.id,
@@ -284,6 +331,24 @@ export function accountBalances(states, view, displayCurrency, mode = 'opening')
 
 // Resolve a tab id into everything the app needs to render that grid.
 export function resolveView(tabId) {
+  if (tabId.startsWith('cut:')) {
+    const filters = tabId.slice(4).split(';').map((s) => { const [d, val] = s.split('='); return [d, decodeURIComponent(val ?? '')] })
+    const accts = ALL_ACCOUNTS.filter((a) => filters.every(([d, val]) => NAV_DIMS[d] && String(NAV_DIMS[d].val(a)) === val))
+    if (accts.length) {
+      const ccys = [...new Set(accts.map((a) => a.currency))]
+      const ccy = ccys.length === 1 ? ccys[0] : BASE_CCY
+      const labels = filters.map(([d, val]) => NAV_DIMS[d].name(accts.find((a) => String(NAV_DIMS[d].val(a)) === val)))
+      const title = labels.join(' · ')
+      return {
+        kind: 'cut', dim: 'cut', filters,
+        title, subtitle: `${accts.length} accounts`, company: title,
+        currency: ccy, locale: CCY_LOCALE[ccy] ?? 'en-GB',
+        entityIds: [...new Set(accts.map((a) => a.entityId))],
+        accountIds: new Set(accts.map((a) => a.id)),
+        tip: `${filters.map(([d]) => NAV_DIMS[d].label).join(' · ')} cut over ${accts.length} accounts. Shown in ${ccy}${ccys.length > 1 ? ' (mixed currencies converted)' : ''}; edit figures on each company grid.`,
+      }
+    }
+  }
   if (tabId.startsWith('acct:')) {
     const a = ALL_ACCOUNTS.find((x) => x.id === tabId.slice(5))
     if (a) {

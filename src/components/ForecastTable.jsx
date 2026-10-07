@@ -41,11 +41,21 @@ export default function ForecastTable({
   litRow,
   underlyingCell,
   gridMode = 'base',
+  stackRow = null,
+  todayBucket = 0,
+  periodStep,
+  periodEdge = { start: false, end: false },
   shockRanges = {},
 }) {
   const editable = granularity === 'day' && !readOnly
   const { num0, dashNum } = useMoney()
   const { inflowRows, outflowRows, totalInflows, totalOutflows, net, sweep, hasSweep, opening, closing } = agg
+  // children per drill-down parent, so a row only advertises a chart split it can actually draw
+  const countKids = (rows) => rows.reduce((m, r) => { if (r.parentPath != null) m[r.parentPath] = (m[r.parentPath] || 0) + 1; return m }, {})
+  const inflowKids = countKids(inflowRows)
+  // today's opening position is the clickable balance — it opens the bank-account breakdown
+  const balAt = todayBucket >= 0 && todayBucket < buckets.length ? todayBucket : 0
+  const outflowKids = countKids(outflowRows)
   const [collapsed, setCollapsed] = useState({})
   const toggle = (s) => setCollapsed((c) => ({ ...c, [s]: !c[s] }))
   // collapsed group nodes, keyed by their tree path
@@ -78,8 +88,33 @@ export default function ForecastTable({
     return false
   }
 
+  // Grouping lives in a tray inside the grid frame, toggled from the corner.
+  // mounted → expanded → settled, and back, so the tray opens and closes on a height animation
+  const [trayOpen, setTrayOpen] = useState(false)
+  const [trayIn, setTrayIn] = useState(false)
+  const [traySettled, setTraySettled] = useState(false)
+  const trayT = useRef([])
+  useEffect(() => () => trayT.current.forEach(clearTimeout), [])
+  const openTray = () => {
+    trayT.current.forEach(clearTimeout)
+    setTrayOpen(true)
+    requestAnimationFrame(() => requestAnimationFrame(() => setTrayIn(true)))
+    trayT.current = [setTimeout(() => setTraySettled(true), 320)]
+  }
+  // hover opens the tray; it closes once the pointer has left both the button and the tray
+  const hoverT = useRef(null)
+  // click opens; hovering back in keeps it open, and leaving the button + tray closes it
+  const trayHoverIn = () => { clearTimeout(hoverT.current) }
+  const trayHoverOut = () => { clearTimeout(hoverT.current); if (trayIn) hoverT.current = setTimeout(() => closeTray(), 280) }
+  useEffect(() => () => clearTimeout(hoverT.current), [])
+  const closeTray = () => {
+    trayT.current.forEach(clearTimeout)
+    setTraySettled(false)
+    setTrayIn(false)
+    trayT.current = [setTimeout(() => setTrayOpen(false), 320)]
+  }
   return (
-    <table className={`grid grid--mode-${gridMode} ${focusActive ? 'grid--focusmode' : ''}`} style={{ width: contentW }}>
+    <table className={`grid grid--mode-${gridMode} ${trayOpen ? 'grid--trayopen' : ''} ${focusActive ? 'grid--focusmode' : ''}`} style={{ width: contentW }}>
       <colgroup>
         <col style={{ width: labelW }} />
         {buckets.map((b) => (
@@ -93,19 +128,24 @@ export default function ForecastTable({
             <span className="rowhead__inner">
               {/* Row mode charts categories everywhere; on account / pool grids —
                   cuts through company data — it just can't also enter shocks. */}
-              <ModeSwitch value={gridMode} onChange={onGridMode} canShock={canShock} />
-              <GroupingPicker
-                multi={groupMulti}
-                onMulti={onGroupMulti}
-                single={groupSingle}
-                onSingle={onGroupSingle}
-                chain={groupChain}
-                onChain={onGroupChain}
-                disabled={groupDisabled}
-                onOpenChange={setGroupMenuOpen}
-                chartStack={chartStack}
-                onChartStack={onChartStack}
+              <GroupButton
+                open={trayIn}
+                onToggle={() => (trayIn ? closeTray() : openTray())}
+                onHoverIn={trayHoverIn}
+                onHoverOut={trayHoverOut}
+                levels={groupLevelsOf(groupMulti, groupSingle, groupChain, groupDisabled)}
+                stacked={chartStack}
               />
+              {periodStep && (
+                <span className="cornernav" role="group" aria-label="Move through time">
+                  <button className="cornernav__btn cornernav__btn--back" onClick={() => periodStep(-1)} disabled={periodEdge.start} aria-label="Back one period" title="Back one period — towards actuals">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M15 6l-6 6 6 6" /></svg>
+                  </button>
+                  <button className="cornernav__btn cornernav__btn--fwd" onClick={() => periodStep(1)} disabled={periodEdge.end} aria-label="Forward one period" title="Forward one period">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M9 6l6 6-6 6" /></svg>
+                  </button>
+                </span>
+              )}
             </span>
           </th>
           {buckets.map((b) => (
@@ -114,6 +154,29 @@ export default function ForecastTable({
             </th>
           ))}
         </tr>
+        {trayOpen && (
+          <tr className="grouptray__row">
+            <td className="grouptray__cell" colSpan={buckets.length + 1}>
+              <div className={`grouptray__wrap ${trayIn ? 'is-in' : ''} ${traySettled ? 'is-settled' : ''}`} onMouseEnter={trayHoverIn} onMouseLeave={trayHoverOut}>
+              <div className="grouptray__clip">
+              <GroupTray
+                onDone={() => setTimeout(closeTray, 160)}
+                multi={groupMulti}
+                onMulti={onGroupMulti}
+                single={groupSingle}
+                onSingle={onGroupSingle}
+                chain={groupChain}
+                onChain={onGroupChain}
+                disabled={groupDisabled}
+                chartStack={chartStack}
+                onChartStack={onChartStack}
+                labelW={labelW}
+              />
+              </div>
+              </div>
+            </td>
+          </tr>
+        )}
       </thead>
 
       <tbody>
@@ -147,9 +210,9 @@ export default function ForecastTable({
           {buckets.map((b, bi) => (
             /* The first cell is the balance the grid opens on — click it for the
                bank accounts it's made of. The rest just carry it forward. */
-            <td key={b.key} className={`grid__cell ${bi === 0 ? 'grid__cell--balcell' : ''} ${bi === 0 && balanceMode === 'opening' ? 'grid__cell--active' : ''}`}>
-              {bi === 0 ? (
-                <BalanceCell value={opening[bi]} num0={num0} mode="opening" active={balanceMode === 'opening'} onOpen={onOpenBalance} />
+            <td key={b.key} className={`grid__cell ${bi === balAt ? 'grid__cell--balcell' : ''} ${bi === balAt && balanceMode === 'opening' ? 'grid__cell--active' : ''}`}>
+              {bi === balAt ? (
+                <BalanceCell value={opening[bi]} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="opening" active={balanceMode === 'opening'} onOpen={onOpenBalance} />
               ) : (
                 <span className={`cell cell--strong ${opening[bi] < 0 ? 'is-neg' : ''}`}>{num0(opening[bi])}</span>
               )}
@@ -167,7 +230,7 @@ export default function ForecastTable({
           values={totalInflows}
           dashNum={dashNum}
           span={buckets.length}
-          selectable={gridMode === 'shocks'}
+          selectable
           selectedCount={leafIds(inflowRows).filter((id) => selected.has(`inflows:${id}`)).length}
           totalCount={leafIds(inflowRows).length}
           onSelectAll={(on) => onSelectSection('inflows', leafIds(inflowRows), on)}
@@ -195,6 +258,9 @@ export default function ForecastTable({
               onCellClick={onCellClick}
               onOpenModel={onOpenModel}
               gridMode={gridMode}
+              splitOnChart={!!stackRow && stackRow.section === 'inflows' && stackRow.id === row.id}
+              canSplit={chartStack}
+              kidCount={inflowKids[row.path] || 0}
               underlyingCell={underlyingCell}
               shockRanges={shockRanges[`inflows:${row.id}`] ?? null}
             />
@@ -210,7 +276,7 @@ export default function ForecastTable({
           values={totalOutflows}
           dashNum={dashNum}
           span={buckets.length}
-          selectable={gridMode === 'shocks'}
+          selectable
           selectedCount={leafIds(outflowRows).filter((id) => selected.has(`outflows:${id}`)).length}
           totalCount={leafIds(outflowRows).length}
           onSelectAll={(on) => onSelectSection('outflows', leafIds(outflowRows), on)}
@@ -238,6 +304,9 @@ export default function ForecastTable({
               onCellClick={onCellClick}
               onOpenModel={onOpenModel}
               gridMode={gridMode}
+              splitOnChart={!!stackRow && stackRow.section === 'outflows' && stackRow.id === row.id}
+              canSplit={chartStack}
+              kidCount={outflowKids[row.path] || 0}
               underlyingCell={underlyingCell}
               shockRanges={shockRanges[`outflows:${row.id}`] ?? null}
             />
@@ -293,7 +362,7 @@ export default function ForecastTable({
             return (
               <td key={bi} className={`grid__cell ${last ? 'grid__cell--balcell' : ''} ${last && balanceMode === 'closing' ? 'grid__cell--active' : ''}`}>
                 {last ? (
-                  <BalanceCell value={v} num0={num0} mode="closing" active={balanceMode === 'closing'} onOpen={onOpenBalance} />
+                  <BalanceCell value={v} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="closing" active={balanceMode === 'closing'} onOpen={onOpenBalance} />
                 ) : (
                   <span className={`cell cell--strong ${v < 0 ? 'is-neg' : ''}`}>{num0(v)}</span>
                 )}
@@ -309,7 +378,10 @@ export default function ForecastTable({
 // A balance figure that doubles as the way into its account breakdown. The two
 // ends of the horizon carry one each: the opening is actual, the closing forecast
 // — the panel draws that distinction, this is just the handle.
-function BalanceCell({ value, num0, mode, active, onOpen }) {
+// Below this column width a full figure leaves no room for the chevron, and it
+// would spill into the neighbouring cell — the hover tint and title carry it.
+const BALCELL_CHEV_MIN_W = 84
+function BalanceCell({ value, num0, compact, mode, active, onOpen }) {
   const closing = mode === 'closing'
   const noun = closing ? 'closing' : 'opening'
   return (
@@ -324,9 +396,9 @@ function BalanceCell({ value, num0, mode, active, onOpen }) {
           : 'Show the actual account balances this opens on'}
     >
       <span className={value < 0 ? 'is-neg' : undefined}>{num0(value)}</span>
-      <svg className="balcell__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {!compact && <svg className="balcell__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M6 3.5 10.5 8 6 12.5" />
-      </svg>
+      </svg>}
     </button>
   )
 }
@@ -633,7 +705,7 @@ function SectionHeader({ title, tone, collapsed, onToggle, onAdd, readOnly, valu
   )
 }
 
-function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, singleFocus, lit, canShock, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
+function LineRow({ kidCount = 0, canSplit = false, splitOnChart = false, hidden, closed, onToggleGroup, section, row, buckets, editable, dashNum, onCell, onRowName, readOnly, focused, singleFocus, lit, canShock, onFocus, onAddShock, onCellClick, onOpenModel, gridMode, underlyingCell, shockRanges }) {
   // Grouped rows (e.g. by currency) are roll-ups, not categories: they have no
   // model behind them, no name to edit and nothing to shock.
   const synthetic = !!row.synthetic
@@ -642,22 +714,20 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
   // gets charted, and how the chart composition finds a parent to split. Shocks
   // are narrower: they're written back to one category of one company, so a
   // roll-up has nowhere to put them.
-  const rowMode = gridMode === 'shocks'
+  // No mode switch: the click target decides. The label gutter selects the row
+  // (charting it, and arming shocks); a cell opens the data underneath it.
+  const rowMode = true
   const shockable = focused && singleFocus && canShock && !synthetic
-  // Row mode: clicking anywhere on the row drills into it — except on
-  // interactive controls (the name field, cell inputs, and the row buttons).
   const onRowClick = (e) => {
-    if (!rowMode) return
     if (e.target.closest('input, textarea, select, button, a')) return
     onFocus()
   }
   return (
     <tr
       className={`grid__row grid__row--item ${focused ? 'grid__row--focused' : ''} ${lit ? 'grid__row--lit' : ''} ${hidden ? 'grid__row--hidden' : ''}`}
-      onClick={onRowClick}
       aria-hidden={hidden || undefined}
     >
-      <td className="grid__rowhead grid__rowhead--item">
+      <td className="grid__rowhead grid__rowhead--item grid__rowhead--pick" onClick={onRowClick} title={focused ? 'On the chart — click to take it off' : 'Click to chart this row'}>
         <span className="rowhead__inner" style={row.depth ? { paddingLeft: row.depth * 18 } : undefined}>
           {/* parent rows in a drill-down chain get their own disclosure */}
           {row.hasChildren ? (
@@ -701,7 +771,7 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
             {/* the model half of the capsule is its own button → model panel */}
             {!synthetic && <button
               className="catcap__btn"
-              onClick={(e) => { e.stopPropagation(); onOpenModel(section, row) }}
+              onClick={(e) => { e.stopPropagation() /* model panel parked for now */ }}
               title={row.modelled ? `${row.model?.name ?? 'Model'} — view model details` : 'Manual entry — view details'}
               aria-label={`${row.name}: ${row.modelled ? row.model?.name ?? 'model' : 'manual entry'} — view details`}
             >
@@ -713,6 +783,18 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
               </span>
             </button>}
           </span>
+          {!splitOnChart && canSplit && row.depth === 0 && row.hasChildren && (
+            <span className={`rowsplit rowsplit--ghost ${kidCount < 2 ? 'rowsplit--flat' : ''}`} title={kidCount < 2 ? 'Only one value beneath — nothing to split on the chart' : 'Select to split this row on the chart'} aria-hidden>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 20h18" /><path d="M4 16l5-6 4 4 7-8" /></svg>
+              Split
+            </span>
+          )}
+          {splitOnChart && (
+            <span className="rowsplit" title="Split on the chart by the next level">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 20h18" /><path d="M4 16l5-6 4 4 7-8" /></svg>
+              Split
+            </span>
+          )}
           {rowMode && (
             /* The row is a selection toggle now, not a drill-in, so it carries the
                same tickbox as the section's Select all — right-aligned, so the
@@ -733,7 +815,7 @@ function LineRow({ hidden, closed, onToggleGroup, section, row, buckets, editabl
         const bEnd = b.dayIndices[b.dayIndices.length - 1]
         const hasShock = shockable && shockRanges && shockRanges.some((r) => bStart <= r.end && bEnd >= r.start)
         // Base mode: read-only cells can be clicked to inspect their underlying data.
-        const inspectable = gridMode === 'base' && !editable
+        const inspectable = !editable
         const isActive = !!underlyingCell && underlyingCell.section === section && underlyingCell.rowId === row.id && underlyingCell.bucketKey === b.key
         return (
           <td
@@ -785,5 +867,185 @@ function PersonIcon() {
       <circle cx="12" cy="8" r="4" fill="currentColor" />
       <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" fill="currentColor" />
     </svg>
+  )
+}
+
+
+// ---- grouping tray ----------------------------------------------------------
+// One level is a plain grouping; two or more is a drill-down — so there's no
+// mode to pick. The tray opens inside the grid frame under the header row.
+const MAX_GROUP_LEVELS = 3
+const groupLevelsOf = (multi, single, chain, disabled = {}) => {
+  if (!multi) return [disabled[single] ? 'category' : single]
+  const live = chain.filter((id) => !disabled[id])
+  return live.length ? live : ['category']
+}
+const glabel = (id) => GROUPINGS.find((g) => g.id === id)?.label ?? id
+
+function GroupButton({ open, onToggle, levels, stacked, onHoverIn, onHoverOut }) {
+  const summary = levels.map(glabel).join(' → ')
+  return (
+    <span className="groupbtn" onMouseEnter={onHoverIn} onMouseLeave={onHoverOut}>
+      <button className={`groupbtn__btn ${open ? 'groupbtn__btn--on' : ''}`} onClick={onToggle} aria-expanded={open} title={`Grouped by ${summary}`}>
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden><path d="M2 3.5h12M5 8h9M5 12.5h9M2 3.5v9" /></svg>
+        <span className="groupbtn__text"><span className="groupbtn__by">Group by&nbsp;</span>{levels.map((id) => glabel(id).toLowerCase()).join(' → ')}</span>
+        <svg className="groupbtn__chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+    </span>
+  )
+}
+
+function GroupTray({ multi, onMulti, single, onSingle, chain, onChain, disabled = {}, chartStack, onChartStack, labelW, onDone }) {
+  const levels = groupLevelsOf(multi, single, chain, disabled)
+  const [drag, setDrag] = useState(null)
+  const [over, setOver] = useState(null)
+  const [pick, setPick] = useState(false)
+  const [w, setW] = useState(null)
+  const [insetR, setInsetR] = useState(null) // right edge lands on the row checkboxes' right edge
+  const [inset, setInset] = useState(null) // the grid's own label inset, so Levels starts where OPENING BALANCE does
+  const ref = useRef(null)
+  const pickRef = useRef(null)
+  // stays the width of the visible grid while the columns scroll beneath it
+  useEffect(() => {
+    const scroller = ref.current?.closest('.aligned__scroll')
+    if (!scroller) return undefined
+    // Insets are taken from the Levels column's own box against the grid rows below, so
+    // any offset between the pinned tray and the scrolled table cancels out.
+    const measure = () => {
+      // Sticky can only pin the tray while the table still spans the viewport. In Months the
+      // grid can be scrolled so the table ends a few px short of the right edge (the column
+      // slack), and a full-width tray would be shoved left by that much — so cap it to the table.
+      const table = ref.current?.closest('table')
+      const sR = scroller.getBoundingClientRect()
+      const span = table ? Math.floor(table.getBoundingClientRect().right - sR.left) : scroller.clientWidth
+      setW(Math.max(0, Math.min(scroller.clientWidth, span)))
+      const lv = ref.current?.querySelector('.grouptray__levels')
+      const head = scroller.querySelector('.grid__row--bal .grid__rowhead .rowhead__inner')
+      const tick = scroller.querySelector('.grid__row--item .tickbox, .grid__section .tickbox')
+      if (!lv) return
+      const L = lv.getBoundingClientRect()
+      if (head) setInset(Math.max(0, Math.round(head.getBoundingClientRect().left - L.left)))
+      if (tick) setInsetR(Math.max(0, Math.round(L.right - tick.getBoundingClientRect().right)))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(scroller)
+    scroller.addEventListener('scroll', measure, { passive: true })
+    const settle = setTimeout(measure, 360)
+    return () => { ro.disconnect(); scroller.removeEventListener('scroll', measure); clearTimeout(settle) }
+  }, [])
+  useEffect(() => {
+    if (!pick) return undefined
+    const onDoc = (e) => { if (pickRef.current && !pickRef.current.contains(e.target)) setPick(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [pick])
+
+  const apply = (next) => {
+    if (next.length === 1) { onSingle(next[0]); onMulti(false) }
+    else {
+      if (levels.length === 1) onChartStack?.(true) // a second level arrives with the chart split on
+      onChain(next); onMulti(true)
+    }
+  }
+  const remove = (id) => { if (levels.length > 1) apply(levels.filter((x) => x !== id)) }
+  const add = (id) => { if (levels.length < MAX_GROUP_LEVELS) apply([...levels, id]) }
+  const reorder = (from, to) => {
+    if (!from || from === to) return
+    const next = levels.filter((x) => x !== from)
+    next.splice(next.indexOf(to) + (levels.indexOf(from) < levels.indexOf(to) ? 1 : 0), 0, from)
+    apply(next)
+  }
+  const reason = (g) => (g.soon ? g.hint : disabled[g.id] ?? null)
+  const avail = GROUPINGS.filter((g) => !levels.includes(g.id))
+  const split = levels.length > 1 && chartStack
+
+  return (
+    <div className="grouptray" ref={ref} style={{ ...(w ? { width: w } : {}), gridTemplateColumns: labelW ? `${labelW}px minmax(0, 1fr)` : undefined }}>
+      <div className="grouptray__levels" >
+        <span className="grouptray__micro">Levels</span>
+        {levels.map((id, i) => (
+          <div
+            key={id}
+            className={`gtlevel ${drag === id ? 'gtlevel--drag' : ''} ${over === id && drag && drag !== id ? 'gtlevel--over' : ''}`}
+            draggable={levels.length > 1}
+            onDragStart={(e) => { try { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move' } catch (err) { /* ignore */ } setDrag(id) }}
+            onDragOver={(e) => { e.preventDefault(); if (over !== id) setOver(id) }}
+            onDrop={(e) => { e.preventDefault(); reorder(drag, id); setDrag(null); setOver(null) }}
+            onDragEnd={() => { setDrag(null); setOver(null) }}
+            style={{ animationDelay: `${i * 40}ms` }}
+          >
+            <span className="gtlevel__grip" aria-hidden>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="9" cy="6" r="1" /><circle cx="15" cy="6" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="9" cy="18" r="1" /><circle cx="15" cy="18" r="1" /></svg>
+            </span>
+            <span className="gtlevel__n">{i + 1}</span>
+            <span className="gtlevel__main">
+              {levels.length === 1 ? (
+                <span className="gtpick" ref={pickRef}>
+                  <button className={`gtpick__btn ${pick ? 'gtpick__btn--on' : ''}`} onClick={() => setPick((p) => !p)} aria-haspopup="listbox" aria-expanded={pick}>
+                    {glabel(id)}
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+                  </button>
+                  {pick && (
+                    <span className="gtpick__menu" role="listbox">
+                      <span className="grouptray__micro gtpick__head">Group rows by</span>
+                      {GROUPINGS.map((g) => {
+                        const off = reason(g)
+                        return (
+                          <button key={g.id} role="option" aria-selected={g.id === id} disabled={!!off} className={`gtpick__opt ${g.id === id ? 'gtpick__opt--on' : ''}`} onClick={() => { if (!off) { apply([g.id]); setPick(false); onDone?.() } }} title={off || undefined}>
+                            <span className="gtpick__tick" aria-hidden><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>
+                            <span className="gtpick__text"><span className="gtpick__label">{g.label}</span><span className="gtpick__hint">{off || g.hint}</span></span>
+                          </button>
+                        )
+                      })}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="gtlevel__label">{glabel(id)}</span>
+              )}
+              {split && i < 2 && (
+                <span className="gtlevel__chart" title={i === 0 ? `Selecting a ${glabel(id).toLowerCase()} row charts it` : `…split by ${glabel(id).toLowerCase()} on the chart`}>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 20h18" /><path d="M4 16l5-6 4 4 7-8" /></svg>
+                  {i === 0 ? 'Chart' : 'Split'}
+                </span>
+              )}
+            </span>
+            {levels.length > 1 && (
+              <button className="gtlevel__x" onClick={() => remove(id)} aria-label={`Remove ${glabel(id)}`}>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
+            )}
+          </div>
+        ))}
+        {levels.length > 1 && (
+          <button className={`gtsplit ${chartStack ? 'gtsplit--on' : ''}`} role="switch" aria-checked={chartStack} onClick={() => onChartStack?.(!chartStack)}>
+            <span className="gtsplit__track" aria-hidden><span className="gtsplit__knob" /></span>
+            Split each {glabel(levels[0]).toLowerCase()} by {glabel(levels[1]).toLowerCase()} on the chart
+          </button>
+        )}
+      </div>
+      <div className="grouptray__add">
+        <span className="grouptray__micro grouptray__addhead">
+          Add a level
+          <span className="gtinfo" tabIndex={0} aria-label="About levels">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.5v.01" /></svg>
+            <span className="gtinfo__tip" role="tooltip">One level is a plain grouping. Add more to drill down; the first two levels also drive the chart split.</span>
+          </span>
+        </span>
+        <div className="grouptray__chips">
+          {levels.length < MAX_GROUP_LEVELS && avail.map((g) => {
+            const off = reason(g)
+            return (
+              <button key={g.id} className="gtchip" disabled={!!off} title={off || g.hint} onClick={() => add(g.id)}>
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d="M12 5v14M5 12h14" /></svg>
+                {g.label}
+              </button>
+            )
+          })}
+          {levels.length >= MAX_GROUP_LEVELS && <span className="grouptray__note">Three levels is the limit — remove one to add another.</span>}
+        </div>
+      </div>
+    </div>
   )
 }
