@@ -4825,3 +4825,127 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 @media (prefers-reduced-motion: reduce) { .ccypick__menu { animation: none; } }
 
 .ccypick__menu { left: -1px; }
+
+/* ---- View: switch control ---------------------------------------------- */
+.vswitch {
+  position: relative; flex: none; width: 36px; height: 20px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: 999px; background: var(--panel-2);
+  cursor: pointer; transition: background 180ms var(--ease-standard), border-color 180ms var(--ease-standard);
+}
+.vswitch__knob {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--muted); transition: transform 200ms cubic-bezier(0.32, 0.72, 0, 1), background 180ms var(--ease-standard);
+}
+.vswitch--on { background: var(--accent-fill); border-color: var(--accent-fill); }
+.vswitch--on .vswitch__knob { transform: translateX(16px); background: var(--accent-ink); }
+:root[data-skin='enterprise'] .vswitch--on { background: var(--brand); border-color: var(--brand); }
+:root[data-skin='enterprise'] .vswitch--on .vswitch__knob { background: #fff; }
+.vswitch:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent); }
+
+/* weekends badge: same fold-in behaviour as the 000s badge */
+.app__controls .app__wkd--on, .app__controls .app__mult--on.app__wkd { max-width: 90px; }
+
+/* ---- period selector: ghost pill follows the hover ---------------------- */
+.seg__ghost {
+  position: absolute; top: 3px; bottom: 3px; left: 0; z-index: 0;
+  border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent-fill) 22%, transparent);
+  opacity: 0; pointer-events: none;
+  transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1), width 260ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard);
+}
+.seg__ghost--on { opacity: 1; }
+:root[data-skin='enterprise'] .seg__ghost { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.seg--slide .seg__pill { z-index: 0; }
+@media (prefers-reduced-motion: reduce) { .seg__ghost { transition: opacity 160ms; } }
+
+/* ---- chart show / hide -------------------------------------------------- */
+.chartwrap {
+  display: grid; grid-template-rows: 1fr;
+  transition: grid-template-rows 320ms cubic-bezier(0.32, 0.72, 0, 1), opacity 220ms var(--ease-standard) 60ms;
+}
+.chartwrap__inner { min-height: 0; overflow: hidden; }
+.chartwrap--off { grid-template-rows: 0fr; opacity: 0; pointer-events: none;
+  transition: grid-template-rows 320ms cubic-bezier(0.32, 0.72, 0, 1) 40ms, opacity 160ms var(--ease-standard); }
+@media (prefers-reduced-motion: reduce) { .chartwrap, .chartwrap--off { transition: none; } }
+
+/* ---- grouping button: fixed-shape label ---------------------------------- */
+.groupbtn__more { color: var(--muted); font-weight: var(--fw-medium); }
+.groupbtn__text { white-space: nowrap; }
+
+/* ---- grid selector: "Change grid" reveals beneath the icon --------------- */
+.titlenav { position: relative; overflow: visible; }
+.titlenav__label {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 35;
+  height: 24px; padding: 0 8px; display: inline-flex; align-items: center;
+  border-radius: var(--r-sm); background: var(--ink); color: var(--panel);
+  font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: 0; line-height: 1; white-space: nowrap;
+  clip-path: inset(0 100% 0 0 round var(--r-sm)); opacity: 0; transform: translateY(-3px); pointer-events: none;
+  transition: clip-path 240ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard), transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.titlenav:hover .titlenav__label, .titlenav:focus-visible .titlenav__label {
+  clip-path: inset(0 0 0 0 round var(--r-sm)); opacity: 1; transform: none; transition-delay: 120ms;
+}
+.titlenav--on .titlenav__label { display: none; }
+@media (prefers-reduced-motion: reduce) { .titlenav__label { transition: opacity 160ms; } }
+
+/* the grid browser hides the period toggle; its badges go with it */
+.app__controls .app__mult { visibility: visible; }
+.app--navshown .app__controls .app__mult { opacity: 0 !important; visibility: hidden; pointer-events: none; transition: opacity 140ms var(--ease-standard), visibility 0s linear 140ms; }
+
+/* No breathing space around the chart: it sits flush under the KPI rule and
+   directly on the grid's header. All full-width rules are the KPI strip's 1px. */
+.aligned__scroll { padding-top: 0; }
+.aligned__scroll .grid, .aligned .gridfoot .grid { margin-top: 0; }
+.aligned--scratch .aligned__scroll { padding-top: 0; }
+.aligned { border-top-width: 1px; border-bottom-width: 1px; }
+.grid .grid__colhead, .grid .grid__rowhead--corner { border-bottom-width: 1px; }
+
+/* Grouping area. The chart's show/hide wrapper clips with overflow: clip (not
+   hidden), so it doesn't become a scroll container and the sticky key works.
+   Context: the gutter (title, y-axis, legend, notes) stays pinned over the
+   grouping column. Chart: the gutter scrolls with the dates, so the plot runs
+   underneath that area edge to edge. */
+.chartwrap__inner { overflow: clip; }
+/* both modes keep the key pinned; Chart simply fades it away so the plot
+   beneath shows through — a pure opacity cross-fade, no jump */
+.aligned .chart__gutter { position: sticky; left: 0; transition: opacity 280ms cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 0s; }
+.aligned--area-chart .chart__gutter { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 280ms cubic-bezier(0.32, 0.72, 0, 1), visibility 0s linear 280ms; }
+@media (prefers-reduced-motion: reduce) { .aligned .chart__gutter { transition: none; } }
+.viewmenu__row--off { opacity: 0.45; }
+.viewmenu__seg .seg__btn:disabled { cursor: default; }
+
+/* Corner cell is one fixed row: the group button shrinks (label ellipsises,
+   "Group by" folds away when there's no room) and the period arrows stay put
+   at the right. Nothing in it may wrap. */
+.grid__rowhead--corner .rowhead__inner { flex-wrap: nowrap; }
+.grid__rowhead--corner .groupbtn { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+.grid__rowhead--corner .groupbtn__btn { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 28px; min-height: 28px; padding-top: 0; padding-bottom: 0; overflow: hidden; }
+.grid__rowhead--corner .groupbtn__text { display: inline-flex; flex-wrap: nowrap; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
+.grid__rowhead--corner .groupbtn__text > :not(.groupbtn__by):not(.groupbtn__more) { overflow: hidden; text-overflow: ellipsis; }
+.grid__rowhead--corner .groupbtn__more { flex: none; }
+.grid__rowhead--corner .cornernav { flex: none; margin-left: auto; }
+.grid__rowhead--corner .groupbtn__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* One rule weight everywhere: every full-width horizontal line in the grid is
+   1px var(--border) — the same as the lines above and below the KPI strip.
+   (Row separators used the paler --grid and balance rows the darker
+   --border-strong, so at 1px they still read as different thicknesses.) */
+.grid .grid__cell, .grid .grid__rowhead, .grid .grid__colhead, .grid .grid__rowhead--corner,
+.grid__section .grid__cell, .grid__section .grid__rowhead,
+.grid__row--move .grid__cell, .grid__row--move .grid__rowhead {
+  border-top-color: var(--border); border-bottom-color: var(--border);
+}
+.grid .grid__row--bal > td { border-top-color: transparent; }
+:root[data-skin='enterprise'] .grid__row--bal .grid__rowhead,
+:root[data-skin='enterprise'] .grid__row--bal .grid__cell { box-shadow: inset 0 1px 0 var(--border); }
+:root[data-skin='enterprise'] .grid__row--bal > .grid__rowhead { box-shadow: inset 0 1px 0 var(--border), inset -1px 0 0 var(--border); }
+.grid--foot .grid__row--net > td { border-top-color: var(--border); }
+/* the Uniun balance rule keeps its brand colour but drops to the same 1px weight */
+:root:not([data-skin='enterprise']) .grid__row--bal .grid__rowhead,
+:root:not([data-skin='enterprise']) .grid__row--bal .grid__cell { box-shadow: inset 0 1px 0 var(--brand); }
+:root:not([data-skin='enterprise']) .grid__row--bal > .grid__rowhead { box-shadow: inset 0 1px 0 var(--brand), inset -1px 0 0 var(--border); }
+/* The chart leaves 10px under its plot for the bottom axis label. The date row
+   sits 7px top / 17px bottom so each date is centred between the plot's bottom
+   edge and the header rule; the corner's controls share that centre line. */
+.grid th.grid__colhead { padding-top: 5px; padding-bottom: 17px; }
+.grid th.grid__rowhead--corner { padding-top: 0; padding-bottom: 10px; }
+.grid th.grid__rowhead--corner > .rowhead__inner { position: relative; top: -6px; }
