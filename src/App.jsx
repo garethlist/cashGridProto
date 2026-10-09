@@ -144,6 +144,16 @@ export default function App() {
   // Grid number multiplier: whole units or thousands. Persisted.
   const [multiplier, setMultiplier] = useState(() => { try { return localStorage.getItem('cf-mult') === 'k' ? 'k' : 'base' } catch (e) { return 'base' } })
   useEffect(() => { try { localStorage.setItem('cf-mult', multiplier) } catch (e) {} }, [multiplier])
+  // View toggles, persisted: weekends in the Days grid, and the chart above the grid.
+  const [showWeekends, setShowWeekends] = useState(() => { try { return localStorage.getItem('cf-weekends') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-weekends', showWeekends ? 'on' : 'off') } catch (e) {} }, [showWeekends])
+  // Grouping area: the space above the grouping column. 'context' keeps the chart's
+  // key there (title, y-axis, stack legend, notes) pinned while the dates scroll;
+  // 'chart' lets the plot run underneath it edge to edge.
+  const [groupArea, setGroupArea] = useState(() => { try { return localStorage.getItem('cf-area') === 'chart' ? 'chart' : 'context' } catch (e) { return 'context' } })
+  useEffect(() => { try { localStorage.setItem('cf-area', groupArea) } catch (e) {} }, [groupArea])
+  const [showChart, setShowChart] = useState(() => { try { return localStorage.getItem('cf-chart') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-chart', showChart ? 'on' : 'off') } catch (e) {} }, [showChart])
   // Skin: the Uniun look, or a light, dense "Enterprise" skin for ERP-style reviews. Persisted.
   const [skin, setSkin] = useState(() => { try { return localStorage.getItem('cf-skin') === 'enterprise' ? 'enterprise' : 'uniun' } catch (e) { return 'uniun' } })
   useLayoutEffect(() => {
@@ -491,7 +501,26 @@ export default function App() {
   // impact. On GROUP this is the raw consolidation, so the impact reflects both
   // rolled-up entity shocks and group-level shocks.
   const baseDaily = useMemo(() => computeDaily(state), [state])
-  const buckets = useMemo(() => bucketize(state.days, granularity), [state.days, granularity])
+  // Hiding weekends (Days view only) folds Saturday and Sunday into the following
+  // Monday's column — the money still lands, and every total still reconciles.
+  // A trailing weekend folds back into the last weekday.
+  const buckets = useMemo(() => {
+    const raw = bucketize(state.days, granularity)
+    if (granularity !== 'day' || showWeekends) return raw
+    const dow = (iso) => new Date(iso + 'T00:00:00Z').getUTCDay()
+    const out = []
+    let pending = []
+    for (const b of raw) {
+      if (dow(b.startISO) % 6 === 0) { pending.push(...b.dayIndices); continue }
+      out.push({ ...b, index: out.length, dayIndices: [...pending, ...b.dayIndices], startISO: pending.length ? state.days[pending[0]] : b.startISO, folded: pending.length > 0 })
+      pending = []
+    }
+    if (pending.length && out.length) {
+      const last = out[out.length - 1]
+      out[out.length - 1] = { ...last, dayIndices: [...last.dayIndices, ...pending], endISO: state.days[pending[pending.length - 1]], folded: true }
+    }
+    return out
+  }, [state.days, granularity, showWeekends])
   // Rows beneath the fixed Inflow/Outflow sections, grouped by one level or a
   // drill-down chain. Only the table's aggregation swaps — the chart, KPIs and
   // balances are unaffected.
@@ -1318,7 +1347,9 @@ export default function App() {
     const keepBucket = widthOnly ? firstBucket.current : null
     anchorColW.current = colW
     const back = restoreRef.current && restoreRef.current.tabId === activeTab && restoreRef.current.bucket != null ? restoreRef.current : null
-    const left = back ? back.bucket * colW : keepBucket != null ? keepBucket * colW : todayBucket * colW
+    const wk = weekendKeep.current
+    weekendKeep.current = null
+    const left = back ? back.bucket * colW : wk != null ? wk * colW : keepBucket != null ? keepBucket * colW : todayBucket * colW
     firstBucket.current = Math.round(left / colW)
     el.scrollLeft = left
     requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollLeft = left })
@@ -1380,6 +1411,23 @@ export default function App() {
     el.addEventListener('scrollend', onEnd)
     return () => { el.removeEventListener('wheel', mark); el.removeEventListener('touchstart', mark); el.removeEventListener('scrollend', onEnd) }
   }, [scrollRef]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The low-point finder scrolls the grid to the lowest day; switching it off
+  // returns to the period the user was on before they asked.
+  const lowOrigin = useRef(null)
+  const toggleFindLow = () => {
+    setFindLow((on) => {
+      const el = scrollRef.current
+      if (!on) {
+        lowOrigin.current = firstBucket.current ?? (el && colW > 0 ? Math.round(el.scrollLeft / colW) : null)
+      } else if (lowOrigin.current != null && el) {
+        const b = lowOrigin.current
+        lowOrigin.current = null
+        firstBucket.current = b
+        requestAnimationFrame(() => el.scrollTo({ left: b * colW, behavior: 'smooth' }))
+      }
+      return !on
+    })
+  }
   const stepPeriod = (d) => {
     const el = scrollRef.current
     if (!el) return
@@ -1532,6 +1580,51 @@ export default function App() {
     }
   }
 
+  // Weekends hidden: the chart drops Saturday and Sunday too, in every period.
+  // A balance line takes Monday's closing over the weekend (which already
+  // includes the weekend's flows); a flow series folds the weekend into Monday.
+  const weekendMask = useMemo(() => (showWeekends ? null : state.days.map((iso) => new Date(iso + 'T00:00:00Z').getUTCDay() % 6 === 0)), [showWeekends, state.days])
+  const nextVisible = useMemo(() => {
+    if (!weekendMask) return null
+    const n = weekendMask.length, nx = new Array(n)
+    let next = -1
+    for (let i = n - 1; i >= 0; i--) { if (!weekendMask[i]) next = i; nx[i] = next }
+    let prev = -1
+    for (let i = 0; i < n; i++) { if (!weekendMask[i]) prev = i; else if (nx[i] < 0) nx[i] = prev }
+    return nx
+  }, [weekendMask])
+  const carry = (s) => (weekendMask && s ? s.map((v, i) => (weekendMask[i] && nextVisible[i] >= 0 ? s[nextVisible[i]] : v)) : s)
+  const fold = (s) => {
+    if (!weekendMask || !s) return s
+    const o = s.slice()
+    for (let i = 0; i < o.length; i++) if (weekendMask[i] && nextVisible[i] >= 0 && nextVisible[i] !== i) { o[nextVisible[i]] += Number(s[i]) || 0 }
+    for (let i = 0; i < o.length; i++) if (weekendMask[i] && nextVisible[i] >= 0) o[i] = o[nextVisible[i]]
+    return o
+  }
+  const chartLines = useMemo(() => (weekendMask ? lines.map((l) => ({ ...l, series: focusActive ? fold(l.series) : carry(l.series) })) : lines), [lines, weekendMask, focusActive]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chartStack2 = useMemo(() => (weekendMask && stack ? { ...stack, bands: stack.bands.map((b) => ({ ...b, values: fold(b.values) })) } : stack), [stack, weekendMask]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Toggling weekends in the Days view changes the column count. Hold the same
+  // day at the left edge (the bucket that now contains it), and tell the chart
+  // how far the scroll moves so its morph starts from where the line was on screen.
+  const wkKey = `${granularity}|${activeTab}|${showWeekends}`
+  const wkPrev = useRef({ key: wkKey, buckets })
+  const wkShift = useRef({ key: wkKey, shift: 0 })
+  const weekendKeep = useRef(null)
+  if (wkPrev.current.key !== wkKey) {
+    const p = wkPrev.current
+    let shift = 0
+    if (p.key.startsWith(`${granularity}|${activeTab}|`) && firstBucket.current != null && p.buckets[firstBucket.current]) {
+      const ob = p.buckets[firstBucket.current]
+      const d = ob.dayIndices[ob.dayIndices.length - 1]
+      const nb = buckets.findIndex((b) => b.dayIndices.includes(d))
+      if (nb >= 0) {
+        weekendKeep.current = nb
+        shift = nb * colW - firstBucket.current * (anchorColW.current || colW)
+      }
+    }
+    wkShift.current = { key: wkKey, shift }
+    wkPrev.current = { key: wkKey, buckets }
+  } else wkPrev.current.buckets = buckets
   // With a panel docked the columns narrow. If whole-unit figures would no longer
   // fit their cells, step up to thousands for as long as a panel is open; the
   // user's own choice is untouched, so closing the panels restores it.
@@ -1570,7 +1663,8 @@ export default function App() {
           {/* The descriptive caption lives in the pill's tooltip rather than a
               subtitle line, to keep the header short. */}
           <h1>
-            <button className={`titlenav ${nav.isOpen ? 'titlenav--on' : ''}`} onClick={nav.toggle} aria-expanded={nav.isOpen} aria-label="Browse grids" title="Browse grids">
+            <button className={`titlenav ${nav.isOpen ? 'titlenav--on' : ''}`} onClick={nav.toggle} aria-expanded={nav.isOpen} aria-label="Change grid">
+              <span className="titlenav__label" aria-hidden>Change grid</span>
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" />
               </svg>
@@ -1649,8 +1743,9 @@ export default function App() {
         {/* right-aligned, so it lines up with the right edge of the last KPI card */}
         <div className="app__controls">
           <span className={`app__mult ${shownMultiplier === 'k' ? 'app__mult--on' : ''} ${autoK ? 'app__mult--auto' : ''}`} title={autoK ? 'Shown in thousands while the side panels are open, so figures fit their narrower columns' : 'Grid figures in thousands'} aria-hidden={shownMultiplier !== 'k'}>{autoK && <span className="app__multauto">Auto</span>}000s</span>
+          <span className={`app__mult app__wkd ${!showWeekends ? 'app__mult--on' : ''}`} title={granularity === 'day' ? 'Weekends hidden — Saturday and Sunday are folded into Monday' : 'Weekends hidden in the Days view'} aria-hidden={showWeekends}>Mon–Fri</span>
           <Segmented value={granularity} onChange={setGranularity} onStart={markBusy} />
-          <ViewMenu multiplier={multiplier} onMultiplier={setMultiplier} autoK={autoK} />
+          <ViewMenu multiplier={multiplier} onMultiplier={setMultiplier} autoK={autoK} showWeekends={showWeekends} onWeekends={setShowWeekends} showChart={showChart} onChart={setShowChart} groupArea={groupArea} onGroupArea={setGroupArea} />
         </div>
       </header>
 
@@ -1712,7 +1807,7 @@ export default function App() {
           value={lowest}
           tone={lowest < 0 ? 'danger' : undefined}
           impact={buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
-          onFind={focusActive || lowestIdx < 0 ? undefined : () => setFindLow((v) => !v)}
+          onFind={focusActive || lowestIdx < 0 ? undefined : toggleFindLow}
           finding={findLow && !focusActive}
           findTitle={findLow ? 'Hide the lowest point on the chart' : 'Find the lowest point on the chart'}
         />
@@ -1778,7 +1873,7 @@ export default function App() {
       ) : null}
 
       {/* One scroll container so chart + table move and align together */}
-      <section className={`aligned ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
+      <section className={`aligned aligned--area-${groupArea} ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
         {scratchpad && (
           <div className="scratchbar">
             <span className="scratchbar__title">
@@ -1852,14 +1947,18 @@ export default function App() {
         </div>
         <div className="aligned__scroll" ref={scrollRef} style={{ scrollPaddingLeft: labelW }}>
           <div className="aligned__content" ref={alignedRef} style={{ width: contentW + Math.max(0, availW - labelW - fitCols * colW) + freezeSlack }}>
+            <div className={`chartwrap ${showChart ? '' : 'chartwrap--off'}`} aria-hidden={!showChart}>
+            <div className="chartwrap__inner">
             <AlignedChart
-              morphKey={granularity}
+              skipDays={weekendMask}
+              morphShift={wkShift.current.key === wkKey ? wkShift.current.shift : 0}
+              morphKey={`${granularity}|${showWeekends}`}
               dockKey={dockKey}
               dockShift={firstBucket.current != null && anchorColW.current > 0 ? firstBucket.current * (colW - anchorColW.current) : 0}
               dockMs={PANEL_MS}
               days={state.days}
-              lines={lines}
-              stack={stack}
+              lines={chartLines}
+              stack={chartStack2}
               dailyNet={daily.dailyNet}
               buckets={buckets}
               labelW={labelW}
@@ -1881,6 +1980,8 @@ export default function App() {
               onOutlierClick={openOutlier}
               todayIndex={todayIdx >= 0 ? todayIdx : null}
             />
+            </div>
+            </div>
             <div className="tablewrap">
               {todayBucket >= 0 && todayIdx > 0 && <div className="todayrule" style={{ left: labelW + todayBucket * colW + (buckets[todayBucket].dayIndices.indexOf(todayIdx) / buckets[todayBucket].dayIndices.length) * colW }} aria-hidden />}
             <div className="tablebusy" aria-hidden="true">
@@ -1966,7 +2067,7 @@ export default function App() {
             detail={modelDetail(modelRow)}
             closing={modelClosing}
             /* sits directly below the chart, so it fills the table's area */
-            topOffset={chartH + (gridHasShocks || annotations.length > 0 ? 26 : 0)}
+            topOffset={showChart ? chartH + (gridHasShocks || annotations.length > 0 ? 26 : 0) : 0}
             onClose={closeModel}
           />
         )}
@@ -2091,8 +2192,16 @@ function UniunRail({ theme, onToggleTheme, skin, onToggleSkin }) {
   )
 }
 
+function ViewSwitch({ on, onChange, label }) {
+  return (
+    <button className={`vswitch ${on ? 'vswitch--on' : ''}`} role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}>
+      <span className="vswitch__knob" aria-hidden />
+    </button>
+  )
+}
+
 // "View" — a home for display controls. Opens a small popover under the button.
-function ViewMenu({ multiplier, onMultiplier, autoK }) {
+function ViewMenu({ multiplier, onMultiplier, autoK, showWeekends, onWeekends, showChart, onChart, groupArea, onGroupArea }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -2125,6 +2234,31 @@ function ViewMenu({ multiplier, onMultiplier, autoK }) {
               ))}
             </span>
           </div>
+          <div className="viewmenu__row">
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Weekends</span>
+              <span className="viewmenu__hint">{showWeekends ? 'Shown as their own days' : 'Folded into Monday (Days view)'}</span>
+            </span>
+            <ViewSwitch on={showWeekends} onChange={onWeekends} label="Show weekends" />
+          </div>
+          <div className="viewmenu__row">
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Chart</span>
+              <span className="viewmenu__hint">{showChart ? 'Daily balance above the grid' : 'Grid only'}</span>
+            </span>
+            <ViewSwitch on={showChart} onChange={onChart} label="Show chart" />
+          </div>
+          <div className={`viewmenu__row ${showChart ? '' : 'viewmenu__row--off'}`}>
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Grouping area</span>
+              <span className="viewmenu__hint">{groupArea === 'context' ? 'Chart key pinned above the groupings' : 'Chart runs under the groupings'}</span>
+            </span>
+            <span className="seg seg--sm viewmenu__seg" role="radiogroup" aria-label="Grouping area">
+              {[['chart', 'Chart'], ['context', 'Context']].map(([k, label]) => (
+                <button key={k} className={`seg__btn ${groupArea === k ? 'seg__btn--on' : ''}`} role="radio" aria-checked={groupArea === k} disabled={!showChart} onClick={() => onGroupArea(k)}>{label}</button>
+              ))}
+            </span>
+          </div>
         </div>
       )}
     </div>
@@ -2137,6 +2271,13 @@ function Segmented({ value, onChange, onStart }) {
   const boxRef = useRef(null)
   const btnRefs = useRef({})
   const [pill, setPill] = useState(null)
+  // a faint ghost of the pill glides to whichever option is under the pointer
+  const [ghost, setGhost] = useState(null)
+  const hoverAt = (k) => {
+    const el = btnRefs.current[k]
+    if (!el) return
+    setGhost({ left: el.offsetLeft, width: el.offsetWidth, on: k !== shown })
+  }
   // The pill follows a local choice set on click, so it slides immediately;
   // the expensive grid re-render is deferred until after that frame paints.
   const [shown, setShown] = useState(value)
@@ -2158,7 +2299,8 @@ function Segmented({ value, onChange, onStart }) {
     return () => ro.disconnect()
   }, [shown])
   return (
-    <div className="seg seg--slide" role="tablist" aria-label="Granularity" ref={boxRef}>
+    <div className="seg seg--slide" role="tablist" aria-label="Granularity" ref={boxRef} onMouseLeave={() => setGhost((g) => (g ? { ...g, on: false } : g))}>
+      {ghost && <span className={`seg__ghost ${ghost.on ? 'seg__ghost--on' : ''}`} style={{ transform: `translateX(${ghost.left}px)`, width: ghost.width }} aria-hidden />}
       {pill && <span className="seg__pill" style={{ transform: `translateX(${pill.left}px)`, width: pill.width }} aria-hidden />}
       {GRANULARITIES.map((g) => (
         <button
@@ -2167,7 +2309,8 @@ function Segmented({ value, onChange, onStart }) {
           role="tab"
           aria-selected={shown === g.key}
           className={`seg__btn ${shown === g.key ? 'seg__btn--on' : ''}`}
-          onClick={() => choose(g.key)}
+          onMouseEnter={() => hoverAt(g.key)}
+          onClick={() => { choose(g.key); setGhost((gh) => (gh ? { ...gh, on: false } : gh)) }}
         >
           {g.label}
         </button>

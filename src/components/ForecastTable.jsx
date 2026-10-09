@@ -874,7 +874,7 @@ function LineRow({ kidCount = 0, canSplit = false, splitOnChart = false, hidden,
                 <ShockIcon size={15} />
               </button>
             )}
-            {editable ? (
+            {editable && b.dayIndices.length === 1 ? (
               <EditableCell value={row.bucketValues[bi]} onChange={(val) => onCell(section, row.id, b.dayIndices[0], val)} />
             ) : (
               <span className="cell cell--agg">{dashNum(row.bucketValues[bi])}</span>
@@ -927,7 +927,7 @@ function GroupButton({ open, onToggle, levels, stacked, onHoverIn, onHoverOut })
     <span className="groupbtn" onMouseEnter={onHoverIn} onMouseLeave={onHoverOut}>
       <button className={`groupbtn__btn ${open ? 'groupbtn__btn--on' : ''}`} onClick={onToggle} aria-expanded={open} title={`Grouped by ${summary}`}>
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden><path d="M2 3.5h12M5 8h9M5 12.5h9M2 3.5v9" /></svg>
-        <span className="groupbtn__text"><span className="groupbtn__by">Group by&nbsp;</span>{levels.map((id) => glabel(id).toLowerCase()).join(' → ')}</span>
+        <span className="groupbtn__text"><span className="groupbtn__by">Group by&nbsp;</span><span className="groupbtn__name">{glabel(levels[0]).toLowerCase()}</span>{levels.length > 1 && <span className="groupbtn__more">&nbsp;(+{levels.length - 1})</span>}</span>
         <svg className="groupbtn__chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
       </button>
     </span>

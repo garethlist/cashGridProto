@@ -10,7 +10,7 @@ import FinderIcon from './FinderIcon.jsx'
 // When `stack` is set the chart draws a composition instead of lines: one row
 // split into its children as stacked areas, daily like everything else here. It
 // takes over the y-domain, since it replaces the lines rather than joining them.
-export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs = 240, days, lines, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover, todayIndex = null }) {
+export default function AlignedChart({ skipDays = null, morphShift = 0, morphKey, dockKey, dockShift = 0, dockMs = 240, days, lines: linesProp, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover, todayIndex = null }) {
   const svgRef = useRef(null)
   const [hover, setHover] = useState(null)
   const [snapToday, setSnapToday] = useState(false) // pointer is on the Today line
@@ -21,12 +21,12 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
   const activeDay = hover != null ? hover : pinnedDay
   const showPinned = hover == null && pinnedDay != null
 
-  // Upper/lower forecast bounds (dummy uncertainty cone) for lines with band on.
+  // Upper/lower forecast bounds (dummy uncertainty cone) for linesProp with band on.
   const bands = useMemo(() => {
     const n = days.length
     const out = {}
     if (stack) return out // a composition has no forecast cone of its own
-    for (const ln of lines) {
+    for (const ln of linesProp) {
       if (!ln.band) continue
       out[ln.id] = {
         upper: ln.series.map((v, i) => v * (1 + bandFraction(i, n))),
@@ -34,24 +34,24 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
       }
     }
     return out
-  }, [lines, days.length, stack])
+  }, [linesProp, days.length, stack])
 
   const padTop = 16
-  const padBottom = 22
+  const padBottom = 12 // room for the lowest y-axis label; the date row is padded to keep its labels centred in the gap
   const plotTop = padTop
   const plotBottom = height - padBottom
   const plotH = plotBottom - plotTop
 
   const geom = useMemo(() => {
     // y domain across every displayed series (+ band bounds), always incl. zero.
-    // A composition replaces the lines rather than joining them, so it owns the
+    // A composition replaces the linesProp rather than joining them, so it owns the
     // domain outright — the balance line it stands in for is orders of magnitude
     // larger and would flatten the stack against the axis.
     const allValues = [0]
     if (stack) {
       for (const v of stack.total) allValues.push(v)
     } else {
-      for (const ln of lines) for (const v of ln.series) allValues.push(v)
+      for (const ln of linesProp) for (const v of ln.series) allValues.push(v)
       for (const id of Object.keys(bands)) {
         for (const v of bands[id].upper) allValues.push(v)
         for (const v of bands[id].lower) allValues.push(v)
@@ -72,20 +72,27 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
     const yScale = (v) => plotBottom - ((v - lo) / (hi - lo)) * plotH
 
     // map every day -> its bucket + position, then to an x coordinate
+    // Hidden days (weekends, when switched off) take no width: the visible days
+    // share their column, and each hidden day sits on the next visible day's x
+    // (its value is already folded there), so it draws nothing.
     const dayToBucket = new Array(days.length)
     const posInBucket = new Array(days.length)
+    const countIn = new Array(buckets.length)
     buckets.forEach((b) => {
-      b.dayIndices.forEach((di, pos) => {
-        dayToBucket[di] = b.index
-        posInBucket[di] = pos
-      })
+      const vis = skipDays ? b.dayIndices.filter((di) => !skipDays[di]) : b.dayIndices
+      const list = vis.length ? vis : b.dayIndices
+      countIn[b.index] = list.length
+      list.forEach((di, pos) => { dayToBucket[di] = b.index; posInBucket[di] = pos })
     })
-    const dayX = days.map((_, i) => {
-      const b = buckets[dayToBucket[i]]
-      const count = b.dayIndices.length
-      const frac = (posInBucket[i] + 0.5) / count
-      return labelW + b.index * colW + frac * colW
-    })
+    const dayX = new Array(days.length)
+    for (let i = 0; i < days.length; i++) {
+      if (dayToBucket[i] == null) continue
+      dayX[i] = labelW + dayToBucket[i] * colW + ((posInBucket[i] + 0.5) / countIn[dayToBucket[i]]) * colW
+    }
+    let nextX = null
+    for (let i = days.length - 1; i >= 0; i--) { if (dayX[i] == null) dayX[i] = nextX; else nextX = dayX[i] }
+    let prevX = null
+    for (let i = 0; i < days.length; i++) { if (dayX[i] == null) dayX[i] = prevX ?? labelW; else prevX = dayX[i] }
 
     const ticks = []
     const N = 5
@@ -94,25 +101,29 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
       ticks.push({ v, y: yScale(v) })
     }
 
-    const primary = lines[0]?.series ?? []
+    const primary = linesProp[0]?.series ?? []
     // "Short of cash" means a balance that reads negative, not one that rounds to
     // zero — otherwise a swept account's -1e-11 residue paints the whole chart as
     // breached. Half a unit is the display precision, so anything inside it is £0.
     // An outflow composition sits entirely below zero by construction, which is
     // its direction of travel, not a cash shortfall — so it never shades.
-    const hasNeg = stack ? false : Math.min(0, ...primary, ...lines.flatMap((l) => l.series)) < -0.5
+    const hasNeg = stack ? false : Math.min(0, ...primary, ...linesProp.flatMap((l) => l.series)) < -0.5
     // Zero sits somewhere on the plot whenever the domain straddles it — which,
     // since the domain always includes zero, is true unless every value is zero.
     // We surface the £0 line whenever it's genuinely in range so the "cash floor"
     // is always readable, not only once a balance has already gone negative.
     const zeroInRange = lo < 0 && hi > 0
     return { lo, hi, yScale, dayX, ticks, hasNeg, zeroInRange, flat }
-  }, [days, lines, stack, bands, buckets, labelW, colW, plotBottom, plotH])
+  }, [days, linesProp, stack, bands, buckets, labelW, colW, plotBottom, plotH, skipDays])
 
   // Days, weeks and months are one daily series on a re-scaled x axis, so a
   // granularity change morphs every point from its old x to its new one — the
   // axis zooms rather than the chart being redrawn.
   const [morphX, setMorphX] = useState(null)
+  // series values tween too (e.g. weekends hidden: dips flatten as the line re-spaces)
+  const [morphS, setMorphS] = useState(null)
+  const prevSeriesRef = useRef(null)
+  const shownSeriesRef = useRef(null)
   const prevXRef = useRef(null)
   const shownXRef = useRef(null)
   const rafRef = useRef(0)
@@ -132,9 +143,13 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
     dockKeyRef.current = dockKey
     // the held period's scroll offset moves with the new column width; shift the
     // start positions by the same amount so the tween starts where the line was on screen
-    const prev = prevRaw && dockChanged && !keyChanged && dockShift ? prevRaw.map((x) => x + dockShift) : prevRaw
+    const shiftBy = keyChanged ? morphShift : dockChanged ? dockShift : 0
+    const prev = prevRaw && shiftBy ? prevRaw.map((x) => x + shiftBy) : prevRaw
     const same = (a, b) => a && b && a.length === b.length && Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[a.length - 1] - b[b.length - 1]) < 0.5
     if (!keyChanged && !dockChanged) {
+      const ps = {}
+      for (const l of linesProp || []) ps[l.id] = l.series
+      if (!shownSeriesRef.current) prevSeriesRef.current = ps
       // a re-render that lands on the same geometry (e.g. the slide settling) must
       // not cut a running tween short — that snap read as a flicker
       if (rafRef.current && same(next, targetXRef.current)) { prevXRef.current = next; return }
@@ -144,7 +159,12 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
     }
     if (!prev || prev.length !== next.length) return
     const n = next.length
-    if (Math.abs(prev[n - 1] - next[n - 1]) < 4 && Math.abs(prev[0] - next[0]) < 4) return
+    const nextS = {}
+    for (const l of linesProp || []) nextS[l.id] = l.series
+    const fromS = keyChanged ? (shownSeriesRef.current || prevSeriesRef.current) : null
+    prevSeriesRef.current = nextS
+    const seriesMoves = fromS && Object.keys(nextS).some((id) => fromS[id] && fromS[id].length === nextS[id].length && fromS[id].some((v, i) => v !== nextS[id][i]))
+    if (!seriesMoves && Math.abs(prev[n - 1] - next[n - 1]) < 4 && Math.abs(prev[0] - next[0]) < 4) return
     cancelAnimationFrame(rafRef.current)
     const from = prev.slice()
     targetXRef.current = next
@@ -152,6 +172,9 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
     // the browser never shows one frame of the end pose before the tween begins
     shownXRef.current = from
     setMorphX(from)
+    const sFrom = seriesMoves ? fromS : null
+    shownSeriesRef.current = sFrom
+    setMorphS(sFrom)
     let t0 = 0
     const D = keyChanged ? 720 : dockMs
     // dock: cubic-bezier(0.32, 0.72, 0, 1) — the panel slide's curve
@@ -175,18 +198,30 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
         for (let i = 0; i < n; i++) x[i] = from[i] + (next[i] - from[i]) * e
         shownXRef.current = x
         setMorphX(x)
+        if (sFrom) {
+          const s = {}
+          for (const id in nextS) {
+            const a = sFrom[id], b = nextS[id]
+            s[id] = a && a.length === b.length ? b.map((v, i) => a[i] + (v - a[i]) * e) : b
+          }
+          shownSeriesRef.current = s
+          setMorphS(s)
+        }
         rafRef.current = requestAnimationFrame(step)
       } else {
         shownXRef.current = null
         rafRef.current = 0
         targetXRef.current = null
         setMorphX(null)
+        shownSeriesRef.current = null
+        setMorphS(null)
       }
     }
     setHover(null)
     rafRef.current = requestAnimationFrame(step)
   }, [geom.dayX])
   useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  const lines = morphS ? linesProp.map((l) => (morphS[l.id] ? { ...l, series: morphS[l.id] } : l)) : linesProp
   const morphing = morphX != null
   const { yScale, ticks, hasNeg, zeroInRange, flat } = geom
   const dayX = morphX || geom.dayX
@@ -291,6 +326,7 @@ export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs 
     let best = 0
     let bestD = Infinity
     for (let i = 0; i < dayX.length; i++) {
+      if (skipDays && skipDays[i]) continue
       const d = Math.abs(dayX[i] - mx)
       if (d < bestD) {
         bestD = d
