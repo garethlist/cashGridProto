@@ -59,7 +59,7 @@
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --dur-fast: 120ms;
   --dur-base: 200ms;
-  --rail-width: 56px;
+  --rail-width: 72px;
   --control-h: 36px; /* shared height for buttons and segmented controls */
   --chip-h: 28px; /* every small capsule: tab-bar toggles and title chips */
 
@@ -73,8 +73,8 @@
   --border: var(--uniun-gray-light);
   --border-strong: var(--uniun-gray-mid-light);
   --grid: var(--uniun-gray-extra-light);
-  --rail-bg: var(--uniun-black);
-  --rail-ink: var(--uniun-white);
+  --rail-bg: var(--uniun-white);
+  --rail-ink: var(--uniun-black);
   /* Neon green is a FILL colour in this system (always with black text); a
      deeper green carries the same accent as text/border where contrast matters. */
   --accent: var(--uniun-success);
@@ -180,46 +180,60 @@ body {
   height: 100vh;
   background: var(--rail-bg);
   color: var(--rail-ink);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-4, 16px);
-  padding: 14px 0 18px;
+  gap: 24px;
+  padding: 20px 0 20px;
   z-index: 60;
 }
-.rail__brand { display: inline-flex; align-items: center; justify-content: center; height: 34px; }
-.rail__apps { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 6px; }
+.rail__brand { display: inline-flex; align-items: center; justify-content: center; height: 40px; }
+.rail__brand img { height: 36px; width: auto; display: block; }
+.rail__brand .rail__mark--light { display: none; }
+:root[data-theme='dark'] .rail__brand .rail__mark--dark { display: none; }
+:root[data-theme='dark'] .rail__brand .rail__mark--light { display: block; }
+/* Enterprise keeps a white rail in either theme, so it always takes the dark mark */
+:root[data-skin='enterprise'] .rail__brand .rail__mark--dark { display: block; }
+:root[data-skin='enterprise'] .rail__brand .rail__mark--light { display: none; }
+.rail__apps { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 8px; }
 .railapp {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: none;
   background: transparent;
-  color: #5a5a5a;
-  border-radius: var(--r-md);
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
 }
-.railapp:hover { color: var(--app-color); background: rgba(255, 255, 255, 0.06); }
-.railapp--on { color: var(--app-color); }
-/* active app gets the brand's green marker against the black rail */
-.railapp--on::before {
-  content: '';
-  position: absolute;
-  left: -10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 20px;
-  border-radius: 0 2px 2px 0;
-  background: var(--uniun-green);
+.railapp__badge {
+  width: 40px; height: 40px; border-radius: 999px; background: var(--app-forecast, #ff3eb5); color: #fff;
+  font: 300 24px/40px var(--font-sans); letter-spacing: 0; display: inline-flex; align-items: center; justify-content: center;
 }
-.rail__foot { margin-top: auto; }
-.rail .themebtn { color: var(--uniun-gray-mid-2); border-color: transparent; background: transparent; }
-.rail .themebtn:hover { color: var(--uniun-green); background: rgba(255, 255, 255, 0.08); }
+.rail__foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.rail__tools { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rail .themebtn { margin-left: 0; color: var(--muted); border-color: transparent; background: transparent; }
+.rail .themebtn:hover { color: var(--ink); background: var(--panel-2); }
+.railhelp {
+  width: 40px; height: 40px; border-radius: 999px; border: none; padding: 0;
+  background: var(--uniun-gray-mid-2, #a6a6a6); color: #fff;
+  font: 300 26px/40px var(--font-sans); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.railhelp:hover { background: var(--muted-strong); }
+.railpulse { width: 48px; height: 48px; padding: 0; border: none; background: transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.railpulse { color: var(--ink); }
+.railpulse svg { display: block; }
+.railavatar {
+  width: 40px; height: 40px; border-radius: 999px; border: none; padding: 0;
+  background: var(--uniun-gray-extra-light, #f2f2f2); color: var(--muted);
+  font: 300 18px/40px var(--font-sans); letter-spacing: 0; cursor: pointer;
+}
+.railavatar:hover { color: var(--ink); }
 
 .app {
   --pad: clamp(16px, 3vw, 48px);
@@ -231,24 +245,22 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  transition: padding-right 0.2s ease, padding-left 0.2s ease;
+  /* no padding transition: animating it re-laid-out the whole chart + grid every
+     frame. The dock reserve snaps once; the panel itself slides on the compositor. */
 }
 /* Base-mode detail panel is non-modal: reserve space so the grid reflows beside
    it and every cell stays clickable ("browse" cells while the panel is open).
    The reserve is exactly the panel's width, so the full-bleed table's frame
    lines butt straight onto the panel's border rather than floating clear of it. */
-.app--docked { padding-right: calc(var(--pad) + 460px); }
-@media (max-width: 900px) { .app--docked { padding-right: var(--pad); } }
-/* Opening-balance panel does the same from the left, so the two can sit open
-   together with the chart and grid framed between them. */
-.app--docked-left { padding-left: calc(var(--pad) + 460px); }
-@media (max-width: 900px) { .app--docked-left { padding-left: var(--pad); } }
-/* Below that breakpoint there's no room to reserve, so the panels overlay the
-   grid rather than framing it — and there they do need to lift off the surface. */
-@media (max-width: 900px) {
-  .balpanel { box-shadow: 8px 0 32px rgba(0, 0, 0, 0.18); }
-  .underpanel { box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18); }
-}
+/* One panel width, shared by the panels and the reserve, so the chart and grid
+   always sit exactly between them. A single panel is 460px (narrower on small
+   windows); with both sides open each gives up width so the middle keeps at
+   least ~44% of the window. */
+.app { --panel-w: min(460px, round(down, calc((100vw - var(--rail-width)) * 0.5), 1px)); }
+/* both open: each pane keeps its full 460px; the middle takes what's left */
+.app--both { --panel-w: min(460px, round(down, calc((100vw - var(--rail-width)) * 0.36), 1px)); }
+.app--docked { padding-right: calc(var(--pad) + var(--panel-w)); }
+.app--docked-left { padding-left: calc(var(--pad) + var(--panel-w)); }
 
 /* --- view tabs ------------------------------------------------------------*/
 .tabbar {
@@ -1273,14 +1285,17 @@ body {
 .splitter--on .splitter__grip { background: var(--accent); }
 
 /* "Expand to scratchpad" affordance — pinned to the top-right, inside the page gutter */
+/* same shell as the View button / period selector */
 .expandbtn {
   position: absolute;
   top: 10px;
   right: var(--pad);
   z-index: 6;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  min-width: var(--control-h);
+  height: var(--control-h);
+  padding: 0 9px;
+  border-radius: var(--r-md);
+  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted-strong);
@@ -1288,15 +1303,20 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.5;
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
 }
-.aligned:hover .expandbtn { opacity: 1; }
-.expandbtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.expandbtn:hover { color: var(--ink); }
+.expandbtn svg { flex: none; }
+/* icon-only at rest; anchored right, so the label opens leftwards and the icon stays put */
+.expandbtn__label {
+  display: inline-block; overflow: hidden; white-space: nowrap;
+  max-width: 0; opacity: 0; margin-right: 0;
+  transition: max-width 220ms var(--ease-standard), opacity 160ms var(--ease-standard), margin-right 220ms var(--ease-standard);
 }
+.expandbtn:hover .expandbtn__label, .expandbtn:focus-visible .expandbtn__label { max-width: 90px; opacity: 1; margin-right: 8px; }
+@media (prefers-reduced-motion: reduce) { .expandbtn__label { transition: none; } }
+.expandbtn:active { border-color: var(--border-strong); }
+:root[data-skin='enterprise'] .expandbtn:active { border-color: var(--brand); }
 
 /* full-screen scratchpad takeover */
 .aligned--scratch {
@@ -2464,7 +2484,8 @@ body {
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18);
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
   z-index: 51;
   display: flex; flex-direction: column;
 }
@@ -2926,6 +2947,11 @@ body {
   display: flex; flex-direction: column;
 }
 .balpanel--open { transform: translateX(0); }
+/* closing balance docks on the right, mirroring the opening panel */
+.balpanel--right { left: auto; right: 0; max-width: 96vw; border-right: none; border-left: 1px solid var(--border); transform: translateX(100%); }
+.balpanel--right.balpanel--open { transform: translateX(0); }
+@media (max-width: 900px) { .balpanel--right { box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18); } }
+
 /* trail back to the grid a drill-through started from */
 .balpanel__crumb {
   display: flex; align-items: center; gap: 6px;
@@ -2994,6 +3020,11 @@ body {
 }
 .balacct:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .balacct--on { background: color-mix(in srgb, var(--accent) 11%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+/* cross-pane focus: the hovered account lifts in both panes, the rest step back */
+.balacct { transition: background var(--dur-fast) var(--ease-standard), opacity var(--dur-fast) var(--ease-standard); }
+.balpanel--hovering .balacct:not(.balacct--hover) { opacity: 0.4; }
+.balacct--hover { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+:root[data-skin='enterprise'] .balacct--hover { background: #e8f1fb; box-shadow: inset 2px 0 0 var(--brand); }
 /* an account holding none of the opening still carries the grid's flows, so it
    stays listed — just quieter */
 .balacct--zero { opacity: 0.55; }
@@ -3029,7 +3060,8 @@ body {
   background: var(--panel);
   border-left: 1px solid var(--border);
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
   z-index: 51;
   display: flex; flex-direction: column;
 }
@@ -3133,7 +3165,8 @@ body {
   /* flat frame, matching the balance panel — see .balpanel */
   border-left: 1px solid var(--border);
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
   z-index: 51;
   display: flex; flex-direction: column;
 }
@@ -4388,7 +4421,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
    cool greys, one calm blue accent, plain sentence-case labels,
    regular-weight type and tighter rows. Always light.
    ============================================================ */
-.rail__foot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .skinbtn--on { color: #0a6ed1 !important; }
 :root[data-skin='enterprise'] {
   --bg: #f4f5f6; --panel: #ffffff; --panel-2: #eef0f2; --ink: #1d2733; --muted: #5b6b7c; --muted-strong: #354250;
@@ -4482,3 +4514,314 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .app :is(.aligned, .metrics, .app__header, .gnavwrap, .scenariobar) { transition: opacity 220ms var(--ease-standard), filter 220ms var(--ease-standard); }
 .app:has(.underpanel--open:hover) :is(.aligned, .metrics, .app__header, .gnavwrap, .scenariobar) { opacity: 0.4; filter: saturate(0.5); }
 .underpanel--open:hover { box-shadow: -12px 0 32px rgba(0, 0, 0, 0.14); }
+
+/* Balance, section and movement rows sit at the same height as item rows in every skin */
+.grid .grid__section > td, .grid .grid__row--move > td, .grid .grid__row--bal > td { padding-top: 4px; padding-bottom: 4px; }
+.grid .grid__row--bal > td { padding-top: 4px; padding-bottom: 5px; }
+/* Enterprise: the grey band of section / movement rows carries into the sticky label column */
+:root[data-skin='enterprise'] .grid__section > .grid__rowhead,
+:root[data-skin='enterprise'] .grid__row--move > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 3.5%, var(--panel)); }
+:root[data-skin='enterprise'] .grid__section:hover > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 5.5%, var(--panel)); }
+:root[data-skin='enterprise'] .grid .grid__section > td, :root[data-skin='enterprise'] .grid .grid__row--move > td, :root[data-skin='enterprise'] .grid .grid__row--bal > td { padding-top: 3px; padding-bottom: 3px; }
+
+/* Net movement / Sweep / Closing balance strip: native sticky, pinned to the viewport bottom */
+.gridfoot {
+  position: sticky; bottom: 0; z-index: 8;
+  overflow: hidden; background: var(--panel);
+  margin-top: -1px;
+}
+.gridfoot__content { position: relative; }
+.grid--foot .grid__row--net > td { border-top: 1px solid var(--grid); }
+/* sticky label cells stay opaque when a row is focused or lit, so scrolled figures never show through */
+.grid__row--focused > .grid__rowhead { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+.grid__row--lit > .grid__rowhead { background: color-mix(in srgb, var(--brand) 12%, var(--panel)); }
+
+/* Pinned date header: zero-height sticky strip, shown once the real header passes under the top bar */
+.gridhead { position: sticky; top: 0; height: 0; z-index: 9; }
+.gridhead__clip { overflow: hidden; background: var(--panel); visibility: hidden; pointer-events: none; }
+.gridhead--on .gridhead__clip { visibility: visible; pointer-events: auto; }
+.gridhead__content { position: relative; }
+
+/* View menu */
+.viewmenu { position: relative; }
+/* same shell as the period selector (.seg): height, fill, hairline, radius */
+.viewmenu__btn {
+  display: inline-flex; align-items: center; gap: 0;
+  height: var(--control-h); min-width: var(--control-h); padding: 0 9px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--panel-2); color: var(--muted-strong);
+  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium);
+  cursor: pointer; transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+.viewmenu__btn:hover, .viewmenu--open .viewmenu__btn { color: var(--ink); }
+.viewmenu__btn svg { flex: none; color: var(--muted-strong); transition: color var(--dur-fast) var(--ease-standard); }
+/* icon-only at rest; the label slides open to the right on hover / focus / open */
+.viewmenu__label {
+  display: inline-block; overflow: hidden; white-space: nowrap;
+  max-width: 0; opacity: 0; margin-left: 0;
+  transition: max-width 220ms var(--ease-standard), opacity 160ms var(--ease-standard), margin-left 220ms var(--ease-standard);
+}
+.viewmenu__btn:hover .viewmenu__label, .viewmenu__btn:focus-visible .viewmenu__label, .viewmenu--open .viewmenu__label {
+  max-width: 48px; opacity: 1; margin-left: 8px;
+}
+.viewmenu__btn:hover svg, .viewmenu--open .viewmenu__btn svg { color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .viewmenu__label { transition: none; } }
+.viewmenu--open .viewmenu__btn { border-color: var(--border-strong); }
+.viewmenu__panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  width: 300px; padding: 14px 16px 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+}
+.viewmenu__title { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); margin-bottom: 10px; }
+.viewmenu__row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--border); }
+.viewmenu__row:first-of-type { border-top: none; padding-top: 2px; }
+.viewmenu__label-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.viewmenu__name { font-size: var(--fs-small); font-weight: var(--fw-semibold); color: var(--ink); }
+.viewmenu__hint { font-size: var(--fs-micro); color: var(--muted); }
+.viewmenu__seg { flex: none; }
+.viewmenu__seg .seg__btn { min-width: 44px; justify-content: center; }
+.app__mult {
+  display: inline-flex; align-items: center; height: var(--chip-h); padding: 0 8px; margin-left: 8px;
+  border: 1px solid var(--border); border-radius: 999px; vertical-align: middle;
+  font-size: var(--fs-micro); font-weight: var(--fw-regular); letter-spacing: var(--tracking-wide); line-height: 1; color: var(--muted-strong);
+}
+:root[data-skin='enterprise'] .app__mult { border-radius: var(--r-sm); letter-spacing: 0; }
+:root[data-skin='enterprise'] .viewmenu--open .viewmenu__btn { border-color: var(--brand); }
+:root[data-skin='enterprise'] .viewmenu__title { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ink); }
+
+/* account shortcut: appears on hover, opens that account's grid (breadcrumb back) */
+.balacct { cursor: default; }
+.balacct__name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.balacct__open {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px; margin-left: 4px;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--panel); color: var(--muted-strong);
+  font: inherit; font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: 0; text-transform: none;
+  cursor: pointer; white-space: nowrap;
+  opacity: 0; transform: translateX(-4px); pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+.balacct:hover .balacct__open, .balacct__open:focus-visible { opacity: 1; transform: none; pointer-events: auto; }
+.balacct__open:hover { color: var(--accent-ink); background: var(--accent-fill); border-color: var(--accent-fill); }
+:root[data-skin='enterprise'] .balacct__open { border-radius: var(--r-sm); }
+:root[data-skin='enterprise'] .balacct__open:hover { color: #fff; background: var(--brand); border-color: var(--brand); }
+
+/* Collapsed by default: name + amount on one light line. The secondary level
+   (account no., bank / ccy / pool, share or movement) folds open on hover — in
+   either pane, since cross-pane focus sets .balacct--hover on both. */
+.balacct__body { padding: 7px 8px; align-items: flex-start; transition: padding 220ms var(--ease-standard); }
+.balacct__name { font-weight: var(--fw-medium); transition: font-weight 0s; }
+.balacct__amt { font-weight: var(--fw-medium); color: var(--muted-strong); transition: color 200ms var(--ease-standard); }
+.balacct__main, .balacct__figs { gap: 0; }
+.balacct__meta, .balacct__sub {
+  max-height: 0; opacity: 0; margin-top: 0; overflow: hidden;
+  transform: translateY(-3px);
+  transition: max-height 240ms var(--ease-standard), opacity 180ms var(--ease-standard), margin-top 240ms var(--ease-standard), transform 240ms var(--ease-standard);
+}
+.balacct__no { opacity: 0; transition: opacity 180ms var(--ease-standard); }
+.balacct__bar { height: 1px; opacity: 0.35; transition: height 220ms var(--ease-standard), opacity 220ms var(--ease-standard); }
+.balacct:hover .balacct__body, .balacct--hover .balacct__body, .balacct--on .balacct__body { padding: 10px 8px; }
+.balacct:hover .balacct__name, .balacct--hover .balacct__name, .balacct--on .balacct__name { font-weight: 600; }
+.balacct:hover .balacct__amt, .balacct--hover .balacct__amt, .balacct--on .balacct__amt { color: var(--ink); font-weight: var(--fw-semibold); }
+.balacct:hover :is(.balacct__meta, .balacct__sub),
+.balacct--hover :is(.balacct__meta, .balacct__sub),
+.balacct--on :is(.balacct__meta, .balacct__sub) { max-height: 20px; opacity: 1; margin-top: 3px; transform: none; }
+.balacct:hover .balacct__no, .balacct--hover .balacct__no, .balacct--on .balacct__no { opacity: 1; }
+.balacct:hover .balacct__bar, .balacct--hover .balacct__bar, .balacct--on .balacct__bar { height: 2px; opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .balacct__body, .balacct__meta, .balacct__sub, .balacct__no, .balacct__bar { transition: none; }
+}
+
+.balpanel__close { flex: none; }
+
+/* Side panels and the page's reserve share one curve and duration (PANEL_MS),
+   so the chart + grid edge travels with the panel edge in both directions. */
+.balpanel, .underpanel, .outpanel {
+  transition: transform 240ms cubic-bezier(0.32, 0.72, 0, 1), width 240ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.app { transition: padding-left 240ms cubic-bezier(0.32, 0.72, 0, 1), padding-right 240ms cubic-bezier(0.32, 0.72, 0, 1); }
+.app .aligned__scroll, .app .gridfoot, .app .gridhead__clip { contain: paint; }
+@media (prefers-reduced-motion: reduce) { .balpanel, .underpanel, .outpanel, .app { transition: none; } }
+
+/* panels take the shared width */
+.app > .balpanel, .app > .underpanel, .app > .outpanel { width: var(--panel-w); max-width: none; }
+.app--docked .aligned--scratch { right: var(--panel-w); }
+.app--docked-left .aligned--scratch { left: calc(var(--rail-width) + var(--panel-w)); }
+
+/* KPI strip reflows when the middle is narrow (both panels docked) instead of clipping */
+.metrics { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.app--both .app__header { flex-wrap: wrap; row-gap: 8px; }
+
+/* Balance panes: header row = the page's top bar, total band = the page's title band */
+.balpanel__head {
+  box-sizing: border-box; height: var(--chrome-top, 53px); flex: none;
+  align-items: center; padding: 0 12px 0 18px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.balpanel__titles { flex-direction: row; align-items: center; }
+.balpanel__title { font-size: var(--fs-small); font-weight: var(--fw-semibold); }
+.balpanel__total {
+  box-sizing: border-box; height: var(--chrome-band, 80px); flex: none;
+  flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px;
+  padding: 0 18px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.balpanel__total-val { font-size: 28px; line-height: 34px; font-weight: var(--fw-extralight); letter-spacing: var(--tracking-tight); }
+.balpanel__total-label { display: flex; flex-wrap: wrap; gap: 0 8px; }
+.balpanel__total-scope { color: var(--muted-strong); }
+.balpanel__total-scope::after { content: '·'; margin-left: 8px; color: var(--muted); }
+:root[data-skin='enterprise'] .balpanel__total-val { font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: 0; }
+:root[data-skin='enterprise'] .balpanel__total-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.balpanel__actions { display: inline-flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
+.balpanel__back { max-width: 200px; min-width: 0; }
+.balpanel__back svg { flex: none; }
+.balpanel__head .balpanel__titles { min-width: 0; overflow: hidden; }
+
+.balpanel__head .balpanel__title { white-space: nowrap; min-width: 0; }
+.balpanel__head .balpanel__titles { flex: 1 1 auto; }
+.balpanel__backlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.balpanel__back { flex: 0 1 auto; }
+.balpanel__actions { flex: 0 1 auto; justify-content: flex-end; }
+/* narrow panes: the back button drops to its icon, the title keeps its line */
+@container balpanel (max-width: 380px) { .balpanel__backlabel { display: none; } .balpanel__head .balstatus { display: none; } }
+.balpanel { container: balpanel / inline-size; }
+
+/* Currency picker in the title: same shell as the View / period controls.
+   "Display in" slides open on hover or focus to say what it does. */
+.ccypick { vertical-align: middle; }
+.ccypick__btn {
+  height: var(--control-h); padding: 0 10px; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--panel-2); color: var(--muted-strong);
+  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); letter-spacing: 0; line-height: 1;
+  cursor: pointer;
+}
+.ccypick__btn:hover, .ccypick--open .ccypick__btn { color: var(--ink); background: var(--panel-2); border-color: var(--border); }
+.ccypick--open .ccypick__btn { border-color: var(--border-strong); }
+:root[data-skin='enterprise'] .ccypick--open .ccypick__btn { border-color: var(--brand); }
+.ccypick__val { font-weight: var(--fw-semibold); color: var(--ink); }
+.ccypick__lead {
+  display: inline-block; overflow: hidden; white-space: nowrap;
+  max-width: 0; opacity: 0; margin-right: -6px;
+  transition: max-width 220ms var(--ease-standard), opacity 160ms var(--ease-standard), margin-right 220ms var(--ease-standard);
+}
+.ccypick__btn:hover .ccypick__lead, .ccypick__btn:focus-visible .ccypick__lead, .ccypick--open .ccypick__lead { max-width: 80px; opacity: 1; margin-right: 0; }
+@media (prefers-reduced-motion: reduce) { .ccypick__lead { transition: none; } }
+/* entity grids: the fixed currency in the same shell, no affordance */
+.app__ccy {
+  height: var(--control-h); padding: 0 12px; vertical-align: middle;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel-2);
+  font-size: var(--fs-small); font-weight: var(--fw-semibold); letter-spacing: 0; line-height: 1; color: var(--ink);
+}
+
+/* 000s badge sits in the controls row, in the same shell as its neighbours */
+.app__controls .app__mult {
+  height: var(--control-h); margin-left: 0; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel-2);
+  font-size: var(--fs-small); font-weight: var(--fw-semibold); letter-spacing: 0; color: var(--muted-strong);
+}
+:root[data-skin='enterprise'] .app__controls .app__mult { border-radius: var(--r-md); }
+
+/* Currency picker at rest: no fill or frame, just a quiet code + caret beside the
+   title. Hover / focus / open bring the full control shell in. */
+.ccypick__btn {
+  background: transparent; border-color: transparent; color: var(--muted);
+  transition: background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.ccypick__val { color: var(--muted-strong); font-weight: var(--fw-medium); transition: color var(--dur-fast) var(--ease-standard); }
+.ccypick__chev { opacity: 0.4; }
+.ccypick__btn:hover, .ccypick__btn:focus-visible, .ccypick--open .ccypick__btn {
+  background: var(--panel-2); border-color: var(--border); color: var(--muted-strong);
+}
+.ccypick__btn:hover .ccypick__val, .ccypick__btn:focus-visible .ccypick__val, .ccypick--open .ccypick__val { color: var(--ink); font-weight: var(--fw-semibold); }
+.ccypick__btn:hover .ccypick__chev, .ccypick--open .ccypick__chev { opacity: 1; }
+
+/* Title row: grid selector, title and currency picker share one centre line and
+   one visual gap. Both controls are the same 36px shell (transparent at rest), so
+   the space between each glyph and the title text reads the same either side. */
+.app__header h1 { align-items: center; gap: 0 6px; }
+.app__header h1 > span:not([class]) { display: inline-flex; align-items: center; height: var(--control-h); line-height: 1; padding-top: 1px; }
+.ccypick__btn { margin-left: -1px; }
+.titlenav {
+  width: var(--control-h); height: var(--control-h); border-radius: var(--r-md);
+  margin-left: -10px; /* icon (not the box) lines up with the page gutter */
+}
+.ccypick__btn { padding: 0 10px; }
+.app__header .app__acct, .app__header .app__ccy { align-self: center; }
+
+/* Enterprise: the title band is grey, so its controls read as white cut-outs */
+:root[data-skin='enterprise'] .app__controls .seg,
+:root[data-skin='enterprise'] .app__controls .viewmenu__btn,
+:root[data-skin='enterprise'] .app__controls .app__mult,
+:root[data-skin='enterprise'] .app__header .app__ccy {
+  background: var(--panel); border-color: var(--border-strong);
+}
+:root[data-skin='enterprise'] .app__header .ccypick__btn:hover,
+:root[data-skin='enterprise'] .app__header .ccypick__btn:focus-visible,
+:root[data-skin='enterprise'] .app__header .ccypick--open .ccypick__btn { background: var(--panel); border-color: var(--border-strong); }
+:root[data-skin='enterprise'] .app__header .titlenav:hover { background: var(--panel); }
+
+/* Selection furniture in the label column is ghosted until the column is in use:
+   hovering anywhere over the field-grouping column (or a row) brings it up.
+   Anything already selected stays at full strength so state is never hidden. */
+.grid .selectall:not(.selectall--on):not(.selectall--some),
+.grid .focusbtn:not(.focusbtn--on) {
+  opacity: 0.18;
+  transition: opacity 160ms var(--ease-standard);
+}
+.grid:has(.grid__rowhead:hover) .selectall,
+.grid:has(.grid__rowhead:hover) .focusbtn,
+.grid .selectall:focus-visible,
+.grid .focusbtn:focus-visible { opacity: 1; }
+/* the row under the pointer comes up fully; the rest of the column half-way */
+.grid:has(.grid__rowhead:hover) .focusbtn:not(.focusbtn--on),
+.grid:has(.grid__rowhead:hover) .selectall:not(.selectall--on):not(.selectall--some) { opacity: 0.55; }
+.grid__row:hover .focusbtn, .grid__section:hover .selectall { opacity: 1 !important; }
+@media (prefers-reduced-motion: reduce) { .grid .selectall, .grid .focusbtn { transition: none; } }
+
+/* 000s badge fades and folds in/out as the number format changes */
+.app__controls .app__mult {
+  overflow: hidden; white-space: nowrap; box-sizing: border-box;
+  max-width: 0; padding: 0; border-width: 0; margin-right: -10px; opacity: 0;
+  transition: opacity 180ms var(--ease-standard), max-width 220ms var(--ease-standard), padding 220ms var(--ease-standard), margin-right 220ms var(--ease-standard), border-width 0s linear 220ms;
+}
+.app__controls .app__mult--on {
+  max-width: 64px; padding: 0 12px; border-width: 1px; margin-right: 0; opacity: 1;
+  transition: opacity 200ms var(--ease-standard) 60ms, max-width 220ms var(--ease-standard), padding 220ms var(--ease-standard), margin-right 220ms var(--ease-standard), border-width 0s;
+}
+@media (prefers-reduced-motion: reduce) { .app__controls .app__mult { transition: none; } }
+
+.app__controls .app__mult--on.app__mult--auto { max-width: 110px; gap: 6px; }
+.app__multauto { font-size: var(--fs-micro); font-weight: var(--fw-regular); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
+:root[data-skin='enterprise'] .app__multauto { text-transform: none; letter-spacing: 0; }
+
+/* Currency menu: hangs exactly under the button at the button's width, styled
+   like the View panel (hairline frame, md radius, shadow-3) with app-standard rows */
+.ccypick__menu {
+  top: calc(100% + 6px); left: 0; right: 0; min-width: 0; width: auto;
+  padding: 4px; gap: 1px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+  font-weight: var(--fw-regular); line-height: 1.2; letter-spacing: 0;
+  animation: ccyIn 140ms var(--ease-standard);
+}
+@keyframes ccyIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.ccypick__opt {
+  height: 30px; padding: 0 8px; gap: 8px;
+  border-radius: var(--r-sm); color: var(--muted-strong);
+  font-size: var(--fs-small); font-weight: var(--fw-medium); letter-spacing: 0;
+}
+.ccypick__opt:hover { background: var(--panel-2); color: var(--ink); }
+.ccypick__code { font-family: var(--font-sans); font-weight: var(--fw-semibold); color: inherit; }
+.ccypick__sym { color: var(--muted); }
+.ccypick__tick { margin-left: auto; flex: none; color: var(--accent); }
+.ccypick__opt--on, .ccypick__opt--on:hover { background: var(--panel-2); color: var(--ink); }
+:root[data-skin='enterprise'] .ccypick__opt--on, :root[data-skin='enterprise'] .ccypick__opt--on:hover { background: #e8f1fb; }
+:root[data-skin='enterprise'] .ccypick__tick { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .ccypick__menu { animation: none; } }
+
+.ccypick__menu { left: -1px; }

@@ -46,6 +46,9 @@ export default function ForecastTable({
   periodStep,
   periodEdge = { start: false, end: false },
   shockRanges = {},
+  footOnly = false,
+  headOnly = false,
+  onHeadGroup,
 }) {
   const editable = granularity === 'day' && !readOnly
   const { num0, dashNum } = useMoney()
@@ -113,16 +116,72 @@ export default function ForecastTable({
     setTrayIn(false)
     trayT.current = [setTimeout(() => setTrayOpen(false), 320)]
   }
-  return (
-    <table className={`grid grid--mode-${gridMode} ${trayOpen ? 'grid--trayopen' : ''} ${focusActive ? 'grid--focusmode' : ''}`} style={{ width: contentW }}>
-      <colgroup>
-        <col style={{ width: labelW }} />
-        {buckets.map((b) => (
-          <col key={b.key} style={{ width: colW }} />
-        ))}
-      </colgroup>
+  // Net movement / Sweep / Closing balance. Rendered in the main table normally;
+  // App also renders a foot-only copy in a sticky strip pinned to the viewport bottom,
+  // and the main table then leaves them out.
+  const footRows = (
+    <>
+        {/* Movement level: the resultant of the Inflow / Outflow groups above,
+            so it carries the same dot + caps-label treatment as their headers. */}
+        <tr className="grid__row grid__row--move grid__row--net">
+          <td className="grid__rowhead">
+            <span className="rowhead__inner">
+              {/* stands in for the section rows' caret so the dot + label line up */}
+              <span className="caret caret--spacer" aria-hidden />
+              <span className="grid__dot grid__dot--net" />
+              <span className="grid__sectiontitle">Net movement</span>
+            </span>
+          </td>
+          {net.map((v, bi) => (
+            <td key={bi} className="grid__cell">
+              <span className={`cell cell--section ${v < 0 ? 'is-neg' : ''}`}>{dashNum(v)}</span>
+            </td>
+          ))}
+        </tr>
 
-      <thead>
+        {/* Sweep: the end-of-day zero-balancing move, a direct consequence of the
+            net movement above. Kept out of the Inflow/Outflow groupings and pinned
+            here beside Net movement; it still folds into the closing balance. */}
+        {hasSweep && (
+          <tr className="grid__row grid__row--move grid__row--sweep">
+            <td className="grid__rowhead">
+              <span className="rowhead__inner">
+                <span className="caret caret--spacer" aria-hidden />
+                <span className="grid__dot grid__dot--sweep" />
+                <span className="grid__sectiontitle">Sweep</span>
+              </span>
+            </td>
+            {sweep.map((v, bi) => (
+              <td key={bi} className="grid__cell">
+                <span className={`cell cell--section ${v < 0 ? 'is-neg' : ''}`}>{dashNum(v)}</span>
+              </td>
+            ))}
+          </tr>
+        )}
+
+        <tr className="grid__row grid__row--bal grid__row--closing">
+          <td className="grid__rowhead">
+            <span className="grid__baltitle">Closing balance</span>
+          </td>
+          {closing.map((v, bi) => {
+            // The horizon's last column is where the forecast lands, so that's
+            // the cell the closing breakdown hangs off — the mirror of the
+            // opening balance's first cell.
+            const last = bi === closing.length - 1
+            return (
+              <td key={bi} className={`grid__cell ${last ? 'grid__cell--balcell' : ''} ${last && balanceMode?.closing ? 'grid__cell--active' : ''}`}>
+                {last ? (
+                  <BalanceCell value={v} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="closing" active={balanceMode?.closing} onOpen={onOpenBalance} />
+                ) : (
+                  <span className={`cell cell--strong ${v < 0 ? 'is-neg' : ''}`}>{num0(v)}</span>
+                )}
+              </td>
+            )
+          })}
+        </tr>
+    </>
+  )
+  const headRow = (
         <tr>
           <th className={`grid__rowhead grid__rowhead--corner ${groupMenuOpen ? 'grid__rowhead--menuopen' : ''}`}>
             <span className="rowhead__inner">
@@ -130,9 +189,9 @@ export default function ForecastTable({
                   cuts through company data — it just can't also enter shocks. */}
               <GroupButton
                 open={trayIn}
-                onToggle={() => (trayIn ? closeTray() : openTray())}
-                onHoverIn={trayHoverIn}
-                onHoverOut={trayHoverOut}
+                onToggle={headOnly ? onHeadGroup : () => (trayIn ? closeTray() : openTray())}
+                onHoverIn={headOnly ? undefined : trayHoverIn}
+                onHoverOut={headOnly ? undefined : trayHoverOut}
                 levels={groupLevelsOf(groupMulti, groupSingle, groupChain, groupDisabled)}
                 stacked={chartStack}
               />
@@ -154,6 +213,44 @@ export default function ForecastTable({
             </th>
           ))}
         </tr>
+  )
+  if (headOnly) {
+    return (
+      <table className={`grid grid--mode-${gridMode} grid--head`} style={{ width: contentW }} aria-hidden="true">
+        <colgroup>
+          <col style={{ width: labelW }} />
+          {buckets.map((b) => (
+            <col key={b.key} style={{ width: colW }} />
+          ))}
+        </colgroup>
+        <thead>{headRow}</thead>
+      </table>
+    )
+  }
+  if (footOnly) {
+    return (
+      <table className={`grid grid--mode-${gridMode} grid--foot`} style={{ width: contentW }}>
+        <colgroup>
+          <col style={{ width: labelW }} />
+          {buckets.map((b) => (
+            <col key={b.key} style={{ width: colW }} />
+          ))}
+        </colgroup>
+        <tbody>{footRows}</tbody>
+      </table>
+    )
+  }
+  return (
+    <table className={`grid grid--mode-${gridMode} ${trayOpen ? 'grid--trayopen' : ''} ${focusActive ? 'grid--focusmode' : ''}`} style={{ width: contentW }}>
+      <colgroup>
+        <col style={{ width: labelW }} />
+        {buckets.map((b) => (
+          <col key={b.key} style={{ width: colW }} />
+        ))}
+      </colgroup>
+
+      <thead>
+        {headRow}
         {trayOpen && (
           <tr className="grouptray__row">
             <td className="grouptray__cell" colSpan={buckets.length + 1}>
@@ -210,9 +307,9 @@ export default function ForecastTable({
           {buckets.map((b, bi) => (
             /* The first cell is the balance the grid opens on — click it for the
                bank accounts it's made of. The rest just carry it forward. */
-            <td key={b.key} className={`grid__cell ${bi === balAt ? 'grid__cell--balcell' : ''} ${bi === balAt && balanceMode === 'opening' ? 'grid__cell--active' : ''}`}>
+            <td key={b.key} className={`grid__cell ${bi === balAt ? 'grid__cell--balcell' : ''} ${bi === balAt && balanceMode?.opening ? 'grid__cell--active' : ''}`}>
               {bi === balAt ? (
-                <BalanceCell value={opening[bi]} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="opening" active={balanceMode === 'opening'} onOpen={onOpenBalance} />
+                <BalanceCell value={opening[bi]} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="opening" active={balanceMode?.opening} onOpen={onOpenBalance} />
               ) : (
                 <span className={`cell cell--strong ${opening[bi] < 0 ? 'is-neg' : ''}`}>{num0(opening[bi])}</span>
               )}
@@ -312,64 +409,6 @@ export default function ForecastTable({
             />
           ))}
 
-        {/* Movement level: the resultant of the Inflow / Outflow groups above,
-            so it carries the same dot + caps-label treatment as their headers. */}
-        <tr className="grid__row grid__row--move grid__row--net">
-          <td className="grid__rowhead">
-            <span className="rowhead__inner">
-              {/* stands in for the section rows' caret so the dot + label line up */}
-              <span className="caret caret--spacer" aria-hidden />
-              <span className="grid__dot grid__dot--net" />
-              <span className="grid__sectiontitle">Net movement</span>
-            </span>
-          </td>
-          {net.map((v, bi) => (
-            <td key={bi} className="grid__cell">
-              <span className={`cell cell--section ${v < 0 ? 'is-neg' : ''}`}>{dashNum(v)}</span>
-            </td>
-          ))}
-        </tr>
-
-        {/* Sweep: the end-of-day zero-balancing move, a direct consequence of the
-            net movement above. Kept out of the Inflow/Outflow groupings and pinned
-            here beside Net movement; it still folds into the closing balance. */}
-        {hasSweep && (
-          <tr className="grid__row grid__row--move grid__row--sweep">
-            <td className="grid__rowhead">
-              <span className="rowhead__inner">
-                <span className="caret caret--spacer" aria-hidden />
-                <span className="grid__dot grid__dot--sweep" />
-                <span className="grid__sectiontitle">Sweep</span>
-              </span>
-            </td>
-            {sweep.map((v, bi) => (
-              <td key={bi} className="grid__cell">
-                <span className={`cell cell--section ${v < 0 ? 'is-neg' : ''}`}>{dashNum(v)}</span>
-              </td>
-            ))}
-          </tr>
-        )}
-
-        <tr className="grid__row grid__row--bal grid__row--closing">
-          <td className="grid__rowhead">
-            <span className="grid__baltitle">Closing balance</span>
-          </td>
-          {closing.map((v, bi) => {
-            // The horizon's last column is where the forecast lands, so that's
-            // the cell the closing breakdown hangs off — the mirror of the
-            // opening balance's first cell.
-            const last = bi === closing.length - 1
-            return (
-              <td key={bi} className={`grid__cell ${last ? 'grid__cell--balcell' : ''} ${last && balanceMode === 'closing' ? 'grid__cell--active' : ''}`}>
-                {last ? (
-                  <BalanceCell value={v} num0={num0} compact={colW < BALCELL_CHEV_MIN_W} mode="closing" active={balanceMode === 'closing'} onOpen={onOpenBalance} />
-                ) : (
-                  <span className={`cell cell--strong ${v < 0 ? 'is-neg' : ''}`}>{num0(v)}</span>
-                )}
-              </td>
-            )
-          })}
-        </tr>
       </tbody>
     </table>
   )
