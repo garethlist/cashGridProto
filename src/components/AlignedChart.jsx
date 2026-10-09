@@ -10,7 +10,7 @@ import FinderIcon from './FinderIcon.jsx'
 // When `stack` is set the chart draws a composition instead of lines: one row
 // split into its children as stacked areas, daily like everything else here. It
 // takes over the y-domain, since it replaces the lines rather than joining them.
-export default function AlignedChart({ days, lines, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover, todayIndex = null }) {
+export default function AlignedChart({ morphKey, dockKey, dockShift = 0, dockMs = 240, days, lines, stack = null, dailyNet, buckets, labelW, colW, contentW, height, title = 'Daily balance', note = null, markers = true, annotations = [], reserveMarkers = false, onAnnotationClick, pinnedDay = null, pinnedLabel, scrollParentRef, outliers = [], activeOutlier = null, onOutlierClick, onStackHover, todayIndex = null }) {
   const svgRef = useRef(null)
   const [hover, setHover] = useState(null)
   const [snapToday, setSnapToday] = useState(false) // pointer is on the Today line
@@ -116,19 +116,58 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
   const prevXRef = useRef(null)
   const shownXRef = useRef(null)
   const rafRef = useRef(0)
+  const morphKeyRef = useRef(morphKey)
+  const dockKeyRef = useRef(dockKey)
+  const targetXRef = useRef(null)
   useLayoutEffect(() => {
     const next = geom.dayX
-    const prev = shownXRef.current || prevXRef.current
+    const prevRaw = shownXRef.current || prevXRef.current
     prevXRef.current = next
+    // A granularity change zooms the axis (720ms). A panel docking squashes or
+    // stretches it in lockstep with the panel (same duration and curve). Any
+    // other width change (window resize) just redraws.
+    const keyChanged = morphKeyRef.current !== morphKey
+    morphKeyRef.current = morphKey
+    const dockChanged = dockKeyRef.current !== dockKey
+    dockKeyRef.current = dockKey
+    // the held period's scroll offset moves with the new column width; shift the
+    // start positions by the same amount so the tween starts where the line was on screen
+    const prev = prevRaw && dockChanged && !keyChanged && dockShift ? prevRaw.map((x) => x + dockShift) : prevRaw
+    const same = (a, b) => a && b && a.length === b.length && Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[a.length - 1] - b[b.length - 1]) < 0.5
+    if (!keyChanged && !dockChanged) {
+      // a re-render that lands on the same geometry (e.g. the slide settling) must
+      // not cut a running tween short — that snap read as a flicker
+      if (rafRef.current && same(next, targetXRef.current)) { prevXRef.current = next; return }
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0 }
+      if (shownXRef.current) { shownXRef.current = null; setMorphX(null) }
+      return
+    }
     if (!prev || prev.length !== next.length) return
     const n = next.length
     if (Math.abs(prev[n - 1] - next[n - 1]) < 4 && Math.abs(prev[0] - next[0]) < 4) return
     cancelAnimationFrame(rafRef.current)
     const from = prev.slice()
-    const t0 = performance.now()
-    const D = 720
-    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+    targetXRef.current = next
+    // paint the start pose in this same commit (layout effect → sync re-render), so
+    // the browser never shows one frame of the end pose before the tween begins
+    shownXRef.current = from
+    setMorphX(from)
+    let t0 = 0
+    const D = keyChanged ? 720 : dockMs
+    // dock: cubic-bezier(0.32, 0.72, 0, 1) — the panel slide's curve
+    const bez = (p1x, p1y, p2x, p2y) => (t) => {
+      let u = t
+      for (let k = 0; k < 6; k++) {
+        const x = 3 * (1 - u) * (1 - u) * u * p1x + 3 * (1 - u) * u * u * p2x + u * u * u - t
+        const dx = 3 * (1 - u) * (1 - u) * p1x + 6 * (1 - u) * u * (p2x - p1x) + 3 * u * u * (1 - p2x)
+        if (Math.abs(dx) < 1e-6) break
+        u = Math.min(1, Math.max(0, u - x / dx))
+      }
+      return 3 * (1 - u) * (1 - u) * u * p1y + 3 * (1 - u) * u * u * p2y + u * u * u
+    }
+    const ease = keyChanged ? (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2) : bez(0.32, 0.72, 0, 1)
     const step = (now) => {
+      if (!t0) t0 = now
       const t = Math.min(1, (now - t0) / D)
       const e = ease(t)
       if (t < 1) {
@@ -139,6 +178,8 @@ export default function AlignedChart({ days, lines, stack = null, dailyNet, buck
         rafRef.current = requestAnimationFrame(step)
       } else {
         shownXRef.current = null
+        rafRef.current = 0
+        targetXRef.current = null
         setMorphX(null)
       }
     }

@@ -25,7 +25,10 @@ export default function UnderlyingPanel({ open, cell, company, currency, onClose
                 </span>
                 <span className="underpanel__sub">{bucket.label} · {company} · {currency}</span>
               </div>
-              <button className="iconbtn" title="Close" onClick={onClose}>×</button>
+              <button className="gclosebtn balpanel__close" title="Close" onClick={onClose}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M18 6 6 18M6 6l12 12" /></svg>
+                Close
+              </button>
             </header>
 
             <div className="underpanel__total">
