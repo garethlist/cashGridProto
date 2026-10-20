@@ -3,7 +3,7 @@ import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, co
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView, EUR_SWEEP,
-  CONTRIB_COLORS, accountBalances, fxConv, TODAY_ISO,
+  CONTRIB_COLORS, accountBalances, scopedDailySeries, fxConv, TODAY_ISO,
 } from './views.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
@@ -20,6 +20,7 @@ import { CurrencyProvider, useMoney } from './currency.jsx'
 import { useGridNav, AcctBadge } from './components/GridNav.jsx'
 import brandMarkDark from './assets/brand-mark-dark.svg'
 import brandMarkLight from './assets/brand-mark-light.svg'
+import fisLogo from './assets/fis-logo.png'
 
 // Shared column geometry — the single source of alignment between chart & table.
 // Wide enough for the row name plus its badges/controls once the full-bleed
@@ -154,10 +155,11 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('cf-area', groupArea) } catch (e) {} }, [groupArea])
   const [showChart, setShowChart] = useState(() => { try { return localStorage.getItem('cf-chart') !== 'off' } catch (e) { return true } })
   useEffect(() => { try { localStorage.setItem('cf-chart', showChart ? 'on' : 'off') } catch (e) {} }, [showChart])
-  // Skin: the Uniun look, or a light, dense "Enterprise" skin for ERP-style reviews. Persisted.
-  const [skin, setSkin] = useState(() => { try { return localStorage.getItem('cf-skin') === 'enterprise' ? 'enterprise' : 'uniun' } catch (e) { return 'uniun' } })
+  // Skin: Uniun, a dense "Enterprise" ERP skin, or "FIS" (Enterprise density in FIS navy + green). Persisted.
+  const [skin, setSkin] = useState(() => { try { const s = localStorage.getItem('cf-skin'); return s === 'enterprise' || s === 'fis' ? s : 'uniun' } catch (e) { return 'uniun' } })
   useLayoutEffect(() => {
     if (skin === 'enterprise') document.documentElement.setAttribute('data-skin', 'enterprise')
+    else if (skin === 'fis') document.documentElement.setAttribute('data-skin', 'enterprise fis')
     else document.documentElement.removeAttribute('data-skin')
     try { localStorage.setItem('cf-skin', skin) } catch (e) { /* ignore */ }
   }, [skin])
@@ -632,11 +634,37 @@ export default function App() {
     return o
   }, [openBreakdown])
   const [balHover, setBalHover] = useState(null)
+  // balance panes: compact = name + amount only; off = bank / ccy / pool and share lines too
+  const [balCompact, setBalCompact] = useState(() => { try { return localStorage.getItem('cf-balcompact') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-balcompact', balCompact ? 'on' : 'off') } catch (e) {} }, [balCompact])
+  // Each account's running balance over the horizon, thinned to ~80 points, for
+  // the sparklines in the balance panes. Only built while a pane is open.
+  const balSparks = useMemo(() => {
+    if (!balOpen.opening && !balOpen.closing) return null
+    const out = {}
+    for (const r of closeBreakdown) {
+      if (r.unassigned) continue
+      const s = scopedDailySeries(shockedStates, displayCurrency, r.entityId, [r.id])
+      if (!s) continue
+      const step = Math.max(1, Math.floor(s.length / 80))
+      const pts = []
+      for (let i = 0; i < s.length; i += step) pts.push(s[i])
+      if ((s.length - 1) % step) pts.push(s[s.length - 1])
+      out[r.id] = pts
+    }
+    return out
+  }, [balOpen.opening, balOpen.closing, closeBreakdown, shockedStates, displayCurrency])
+  const todayFrac = state.days.length > 1 ? Math.max(0, state.days.indexOf(TODAY_ISO)) / (state.days.length - 1) : 0
+  // Chart path: while on, hovering an account or company in either balance pane
+  // drives the chart, grid and KPIs from that target. Shared by both panes.
+  const [chartPath, setChartPath] = useState(false)
+  const toggleChartPath = useCallback(() => setChartPath((on) => !on), [])
   // Context of the grid a panel drill started from, so closing the panels can put
   // the user back exactly where they were: same grid, period window, page scroll
   // and selected rows.
   const restoreRef = useRef(null)
   const ctxRef = useRef({ colW: 0, selection: [] })
+  useEffect(() => { if (!balOpen.opening && !balOpen.closing) setChartPath(false) }, [balOpen])
   const closeBalanceOnly = useCallback((which) => setBalOpen((b) => (which ? { ...b, [which]: false } : { opening: false, closing: false })), [])
   // Every other route to another grid — the tab strip, the view picker, the
   // contributions legend, a shock's source link — abandons the drill-through, so
@@ -648,8 +676,8 @@ export default function App() {
   // Drill from the panel into one account's own grid, remembering where we came
   // from. The first origin is kept, so "back" always returns to where the trail
   // started rather than one hop up it.
-  const drillToAccount = useCallback((acctId) => {
-    const id = acctTab(acctId)
+  const drillToAccount = useCallback((acctId, asTab) => {
+    const id = asTab ? acctId : acctTab(acctId)
     if (id === activeTab) return
     setBalanceOrigin((cur) => cur ?? {
       tabId: activeTab,
@@ -660,14 +688,6 @@ export default function App() {
     })
     setActiveTab(id)
   }, [activeTab, view.title])
-  // From the opening pane, an account drill also opens the closing pane on the
-  // right, so the account's start and end positions read side by side.
-  const drillFromOpening = useCallback((acctId) => {
-    drillToAccount(acctId)
-    setUnderlying(null)
-    setOutlierDay(null)
-    setBalOpen((b) => (b.closing ? b : { ...b, closing: true }))
-  }, [drillToAccount])
   const backToOrigin = useCallback(() => {
     if (balanceOrigin) {
       restoreRef.current = { ...balanceOrigin }
@@ -1542,6 +1562,9 @@ export default function App() {
   const lowest = daily.dailyClosing.length ? Math.min(...daily.dailyClosing) : 0
   const lowestIdx = daily.dailyClosing.length ? daily.dailyClosing.indexOf(lowest) : -1
   const netTotal = daily.dailyNet.reduce((a, b) => a + b, 0)
+  // Today's opening: the horizon's start balance carried through every actual day
+  // before today — the same position the balance panel splits across accounts.
+  const todayOpening = todayIdx > 0 ? daily.dailyClosing[todayIdx - 1] ?? 0 : Number(effectiveState.openingBalance) || 0
 
   const baseClosing = baseDaily.dailyClosing[baseDaily.dailyClosing.length - 1] ?? 0
   const baseLowest = baseDaily.dailyClosing.length ? Math.min(...baseDaily.dailyClosing) : 0
@@ -1601,8 +1624,50 @@ export default function App() {
     for (let i = 0; i < o.length; i++) if (weekendMask[i] && nextVisible[i] >= 0) o[i] = o[nextVisible[i]]
     return o
   }
-  const chartLines = useMemo(() => (weekendMask ? lines.map((l) => ({ ...l, series: focusActive ? fold(l.series) : carry(l.series) })) : lines), [lines, weekendMask, focusActive]) // eslint-disable-line react-hooks/exhaustive-deps
-  const chartStack2 = useMemo(() => (weekendMask && stack ? { ...stack, bands: stack.bands.map((b) => ({ ...b, values: fold(b.values) })) } : stack), [stack, weekendMask]) // eslint-disable-line react-hooks/exhaustive-deps
+  // What the chart path follows: one account, or a whole company when its header
+  // is hovered (just the accounts in scope on an account / pool cut).
+  const pathAcct = useMemo(() => {
+    if (!chartPath || !balHover) return null
+    const hid = String(balHover.id)
+    if (hid.startsWith('co:')) {
+      const entityId = hid.slice(3)
+      const rows = closeBreakdown.filter((r) => r.entityId === entityId)
+      if (!rows.length) return null
+      const e = ENTITIES.find((x) => x.id === entityId)
+      return { id: hid, entityId, name: e?.company ?? entityId, color: rows[0].color, acctIds: view.accountIds ? rows.filter((r) => !r.unassigned).map((r) => r.id) : null }
+    }
+    const r = closeBreakdown.find((x) => x.id === balHover.id && !x.unassigned)
+    return r ? { id: r.id, entityId: r.entityId, name: `${r.name} ···${r.number}`, color: r.color, acctIds: [r.id] } : null
+  }, [chartPath, balHover, closeBreakdown, view.accountIds])
+  const pathSeries = useMemo(() => (pathAcct ? scopedDailySeries(shockedStates, displayCurrency, pathAcct.entityId, pathAcct.acctIds) : null), [pathAcct, shockedStates, displayCurrency])
+  // KPIs follow the path: the hovered account's / company's own figures
+  const pathKpi = useMemo(() => {
+    if (!pathSeries || !pathSeries.length) return null
+    const ti = state.days.indexOf(TODAY_ISO)
+    const closing = pathSeries[pathSeries.length - 1]
+    return {
+      opening: ti > 0 ? pathSeries[ti - 1] : pathSeries.opening,
+      closing,
+      net: closing - pathSeries.opening,
+      lowest: Math.min(...pathSeries),
+    }
+  }, [pathSeries, state.days])
+  // The grid follows the path too: same grouping and columns, with only the flows
+  // the hovered company / account carries and its own opening balance.
+  const gridAgg = useMemo(() => {
+    if (!pathSeries || !pathAcct) return agg
+    const set = pathAcct.acctIds ? new Set(pathAcct.acctIds) : null
+    const keep = (r) => !set || set.has(r.account?.id)
+    const srcs = viewSources(shockedStates)
+      .filter((s, i) => view.entityIds[i] === pathAcct.entityId && s.state)
+      .map((s) => ({ ...s, state: { ...s.state, inflows: s.state.inflows.filter(keep), outflows: s.state.outflows.filter(keep) } }))
+    return aggregateGrouped(srcs, groupLevels, buckets, pathSeries.opening, state.days.length)
+  }, [pathSeries, pathAcct, agg, viewSources, shockedStates, view.entityIds, groupLevels, buckets, state.days.length])
+  const shownLines = useMemo(() => (pathSeries
+    ? [{ id: 'acctpath', name: pathAcct.name, code: null, model: null, color: pathAcct.color, series: pathSeries, band: false, prominent: true, muted: false }]
+    : lines), [pathSeries, lines]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chartLines = useMemo(() => (weekendMask ? shownLines.map((l) => ({ ...l, series: focusActive ? fold(l.series) : carry(l.series) })) : shownLines), [shownLines, weekendMask, focusActive]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chartStack2 = useMemo(() => (pathSeries ? null : weekendMask && stack ? { ...stack, bands: stack.bands.map((b) => ({ ...b, values: fold(b.values) })) } : stack), [stack, weekendMask, pathSeries]) // eslint-disable-line react-hooks/exhaustive-deps
   // Toggling weekends in the Days view changes the column count. Hold the same
   // day at the left edge (the bucket that now contains it), and tell the chart
   // how far the scroll moves so its morph starts from where the line was on screen.
@@ -1642,7 +1707,7 @@ export default function App() {
   return (
     <CurrencyProvider currency={displayCurrency} locale={displayLocale} multiplier={shownMultiplier}>
     <div className="shell">
-    <UniunRail theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} skin={skin} onToggleSkin={() => setSkin((s) => (s === 'enterprise' ? 'uniun' : 'enterprise'))} />
+    <UniunRail look={skin === 'uniun' ? theme : skin === 'fis' ? (theme === 'dark' ? 'fis-dark' : 'fis-light') : skin} onLook={(l) => { if (l === 'light' || l === 'dark') { setSkin('uniun'); setTheme(l) } else if (l === 'fis-light' || l === 'fis-dark') { setSkin('fis'); setTheme(l === 'fis-dark' ? 'dark' : 'light') } else { setSkin(l); setTheme('light') } }} />
     <div ref={appRef} className={`app ${dock.right ? 'app--docked' : ''} ${dock.left ? 'app--docked-left' : ''} ${wantLeft && wantRight ? 'app--both' : ''} ${nav.open ? 'app--navopen' : ''} ${nav.isOpen ? 'app--navshown' : ''}`}>
       {/* grid navigator: breadcrumb bar + in-frame route browser */}
       <div className="gnavwrap">
@@ -1788,25 +1853,25 @@ export default function App() {
       </section>
       )}
 
-      <section className="metrics">
+      <section className={`metrics ${pathKpi ? 'metrics--path' : ''}`}>
         <Metric
           label="Opening balance"
-          value={state.openingBalance}
+          value={pathKpi ? pathKpi.opening : todayOpening}
           onFind={() => showBalance('opening')}
           finding={balOpen.opening}
           findTitle={balOpen.opening ? 'Hide the accounts behind the opening balance' : 'Show the actual account balances this opens on'}
         />
         <Metric
           label="Net over horizon"
-          value={netTotal}
+          value={pathKpi ? pathKpi.net : netTotal}
           signed
-          impact={buildImpact(netTotal, baseNet, kpiScenario?.net)}
+          impact={pathKpi ? undefined : buildImpact(netTotal, baseNet, kpiScenario?.net)}
         />
         <Metric
           label="Lowest point"
-          value={lowest}
-          tone={lowest < 0 ? 'danger' : undefined}
-          impact={buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
+          value={pathKpi ? pathKpi.lowest : lowest}
+          tone={(pathKpi ? pathKpi.lowest : lowest) < 0 ? 'danger' : undefined}
+          impact={pathKpi ? undefined : buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
           onFind={focusActive || lowestIdx < 0 ? undefined : toggleFindLow}
           finding={findLow && !focusActive}
           findTitle={findLow ? 'Hide the lowest point on the chart' : 'Find the lowest point on the chart'}
@@ -1814,8 +1879,8 @@ export default function App() {
         {/* far right: the horizon's end, on the same side its panel docks */}
         <Metric
           label="Closing balance"
-          value={closingEnd}
-          impact={buildImpact(closingEnd, baseClosing, kpiScenario?.closing)}
+          value={pathKpi ? pathKpi.closing : closingEnd}
+          impact={pathKpi ? undefined : buildImpact(closingEnd, baseClosing, kpiScenario?.closing)}
           onFind={() => showBalance('closing')}
           finding={balOpen.closing}
           findTitle={balOpen.closing ? 'Hide the accounts behind the closing balance' : 'Show the forecast account balances this ends on'}
@@ -1873,7 +1938,7 @@ export default function App() {
       ) : null}
 
       {/* One scroll container so chart + table move and align together */}
-      <section className={`aligned aligned--area-${groupArea} ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
+      <section className={`aligned aligned--area-${groupArea} ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''} ${pathSeries ? 'aligned--path' : ''}`}>
         {scratchpad && (
           <div className="scratchbar">
             <span className="scratchbar__title">
@@ -1926,7 +1991,7 @@ export default function App() {
                 headOnly
                 onHeadGroup={openGroupFromHead}
                 buckets={buckets}
-                agg={agg}
+                agg={gridAgg}
                 granularity={granularity}
                 labelW={labelW}
                 colW={colW}
@@ -1998,7 +2063,7 @@ export default function App() {
             </div>
             <ForecastTable
               buckets={buckets}
-              agg={agg}
+              agg={gridAgg}
               granularity={granularity}
               labelW={labelW}
               colW={colW}
@@ -2048,7 +2113,7 @@ export default function App() {
             <ForecastTable
               footOnly
               buckets={buckets}
-              agg={agg}
+              agg={gridAgg}
               granularity={granularity}
               labelW={labelW}
               colW={colW}
@@ -2091,6 +2156,12 @@ export default function App() {
         order={balOrder}
         hover={balHover}
         onHover={setBalHover}
+        chartPath={chartPath}
+        onChartPath={toggleChartPath}
+        sparks={balSparks}
+        compact={balCompact}
+        onCompact={setBalCompact}
+        todayFrac={todayFrac}
         view={view}
         breakdown={openBreakdown}
         total={openBreakdown.reduce((s, r) => s + (Number(r.value) || 0), 0)}
@@ -2099,7 +2170,8 @@ export default function App() {
         lastDay={state.days[state.days.length - 1]}
         activeTab={activeTab}
         origin={balanceOrigin}
-        onSelectAccount={drillFromOpening}
+        onSelectAccount={drillToAccount}
+        onSelectEntity={(id) => drillToAccount(id, true)}
         onBack={backToOrigin}
         onClose={() => closeBalance()}
       />
@@ -2110,6 +2182,12 @@ export default function App() {
         order={balOrder}
         hover={balHover}
         onHover={setBalHover}
+        chartPath={chartPath}
+        onChartPath={toggleChartPath}
+        sparks={balSparks}
+        compact={balCompact}
+        onCompact={setBalCompact}
+        todayFrac={todayFrac}
         view={view}
         breakdown={closeBreakdown}
         total={closingEnd}
@@ -2119,6 +2197,7 @@ export default function App() {
         activeTab={activeTab}
         origin={balanceOrigin}
         onSelectAccount={drillToAccount}
+        onSelectEntity={(id) => drillToAccount(id, true)}
         onBack={backToOrigin}
         onClose={() => closeBalance()}
       />
@@ -2154,12 +2233,55 @@ export default function App() {
 
 // The Uniun shell rail, as in the live Honeycomb app: white, hairline edge,
 // brand mark on top, the current app's rich icon, then help / Pulse / avatar.
-function UniunRail({ theme, onToggleTheme, skin, onToggleSkin }) {
+const LOOKS = [
+  { id: 'light', label: 'Standard - Light' },
+  { id: 'dark', label: 'Standard - Dark' },
+  { id: 'enterprise', label: 'Enterprise' },
+  { id: 'fis-light', label: 'FIS - Light' },
+  { id: 'fis-dark', label: 'FIS - Dark' },
+]
+function SkinMenu({ look, onLook }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  const cur = LOOKS.find((l) => l.id === look) ?? LOOKS[0]
+  return (
+    <span ref={ref} className={`skinmenu ${open ? 'skinmenu--open' : ''}`}>
+      <button className="themebtn" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} title={`Appearance: ${cur.label}`} aria-label="Appearance">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+      {open && (
+        <span className="skinmenu__panel" role="menu">
+          <span className="skinmenu__title">Appearance</span>
+          {LOOKS.map((l) => (
+            <button key={l.id} role="menuitemradio" aria-checked={l.id === look} className={`skinmenu__opt ${l.id === look ? 'skinmenu__opt--on' : ''}`} onClick={() => { onLook(l.id); setOpen(false) }}>
+              <span className={`skinmenu__sw skinmenu__sw--${l.id}`} aria-hidden />
+              <span className="skinmenu__name">{l.label}</span>
+              {l.id === look && <svg className="skinmenu__tick" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 8.5 6.5 12 13 4.5" /></svg>}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function UniunRail({ look, onLook }) {
   return (
     <nav className="rail" aria-label="Uniun apps">
       <span className="rail__brand" title="Uniun">
         <img className="rail__mark--dark" src={brandMarkDark} alt="Uniun" />
         <img className="rail__mark--light" src={brandMarkLight} alt="Uniun" />
+        <img className="rail__mark--fis" src={fisLogo} alt="FIS" />
       </span>
       <span className="rail__apps">
         <button className="railapp railapp--on" title="Forecast (current)" aria-current="page">
@@ -2168,18 +2290,7 @@ function UniunRail({ theme, onToggleTheme, skin, onToggleSkin }) {
       </span>
       <span className="rail__foot">
         <span className="rail__tools">
-          <button
-            className={`themebtn skinbtn ${skin === 'enterprise' ? 'skinbtn--on' : ''}`}
-            onClick={onToggleSkin}
-            aria-pressed={skin === 'enterprise'}
-            title={skin === 'enterprise' ? 'Switch to the Uniun skin' : 'Switch to the Enterprise skin'}
-            aria-label="Toggle Enterprise skin"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M3 9h18M3 14h18M9 9v11" />
-            </svg>
-          </button>
-          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <SkinMenu look={look} onLook={onLook} />
         </span>
         <button className="railhelp" title="Help" aria-label="Help">?</button>
         <button className="railpulse" title="Pulse" aria-label="Pulse"><svg viewBox="50 80 162 72" width="46" height="20" aria-hidden>
@@ -2684,29 +2795,6 @@ function SeriesRow({ s, fixed, selected, onSelect, bandOn, onToggleBand }) {
         <BandToggle on={bandOn} color={s.color} onClick={onToggleBand} />
       </span>
     </div>
-  )
-}
-
-function ThemeToggle({ theme, onToggle }) {
-  const dark = theme === 'dark'
-  return (
-    <button
-      className="themebtn"
-      onClick={onToggle}
-      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      aria-label="Toggle colour theme"
-    >
-      {dark ? (
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-          <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
-        </svg>
-      )}
-    </button>
   )
 }
 
