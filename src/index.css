@@ -186,11 +186,15 @@ body {
   align-items: center;
   gap: 24px;
   padding: 20px 0 20px;
-  z-index: 60;
+  /* the app rail sits above everything — drawers slide out beneath it, never over it */
+  z-index: 1000;
+  isolation: isolate;
 }
 .rail__brand { display: inline-flex; align-items: center; justify-content: center; height: 40px; }
 .rail__brand img { height: 36px; width: auto; display: block; }
 .rail__brand .rail__mark--light { display: none; }
+/* the FIS logo replaces the Uniun mark in the FIS skin only */
+.rail__brand .rail__mark--fis { display: none; }
 :root[data-theme='dark'] .rail__brand .rail__mark--dark { display: none; }
 :root[data-theme='dark'] .rail__brand .rail__mark--light { display: block; }
 /* Enterprise keeps a white rail in either theme, so it always takes the dark mark */
@@ -234,6 +238,32 @@ body {
   font: 300 18px/40px var(--font-sans); letter-spacing: 0; cursor: pointer;
 }
 .railavatar:hover { color: var(--ink); }
+
+/* Appearance switcher: a menu off the rail's theme button */
+.skinmenu { position: relative; display: inline-flex; }
+.skinmenu--open .themebtn { color: var(--ink); background: var(--panel-2); }
+.skinmenu__panel {
+  position: absolute; left: calc(100% + 10px); bottom: 0; z-index: 90;
+  width: 210px; padding: 6px; display: flex; flex-direction: column; gap: 1px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-3); animation: ccyIn 140ms var(--ease-standard);
+}
+.skinmenu__title { padding: 6px 8px 6px; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
+.skinmenu__opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px;
+  border: none; border-radius: var(--r-sm); background: transparent; color: var(--muted-strong);
+  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); text-align: left; cursor: pointer;
+}
+.skinmenu__opt:hover { background: var(--panel-2); color: var(--ink); }
+.skinmenu__opt--on { color: var(--ink); font-weight: var(--fw-semibold); }
+.skinmenu__name { flex: 1; }
+.skinmenu__tick { flex: none; color: var(--accent); }
+.skinmenu__sw { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border-strong); }
+.skinmenu__sw--light { background: linear-gradient(135deg, #ffffff 50%, #00ff73 50%); }
+.skinmenu__sw--dark { background: linear-gradient(135deg, #000000 50%, #00ff73 50%); }
+.skinmenu__sw--enterprise { background: linear-gradient(135deg, #f4f5f6 50%, #0a6ed1 50%); }
+.skinmenu__sw--fis-light { background: linear-gradient(135deg, #ffffff 50%, #4bcd3e 50%); }
+.skinmenu__sw--fis-dark { background: linear-gradient(135deg, #1d1e4b 50%, #4bcd3e 50%); }
 
 .app {
   --pad: clamp(16px, 3vw, 48px);
@@ -2164,23 +2194,31 @@ body {
 /* Collapse/expand animation. The rows stay mounted so both directions can be
    animated: the cell contents shrink to zero height while the cells' padding
    and rules close up, so the section concertinas rather than snapping. */
+/* rows have a fixed height, so that animates down to 0 with the content too, or
+   rows snap shut and leave the content's own fold playing inside them */
 .grid .grid__row--item > td {
-  transition: padding-top var(--dur-base) var(--ease-standard), padding-bottom var(--dur-base) var(--ease-standard),
+  transition: height var(--dur-base) var(--ease-standard), padding var(--dur-base) var(--ease-standard),
     line-height var(--dur-base) var(--ease-standard), border-bottom-width var(--dur-base) var(--ease-standard);
 }
+@media (prefers-reduced-motion: reduce) { .grid .grid__row--item > td { transition: none; } }
 .grid .grid__row--item > td > * {
   max-height: 44px; /* needs a number at both ends for max-height to animate */
   transition: max-height var(--dur-base) var(--ease-standard), opacity 150ms var(--ease-standard);
 }
+.grid .grid__row--hidden { line-height: 0; font-size: 0; }
 .grid .grid__row--hidden > td {
+  height: 0;
   padding-top: 0;
   padding-bottom: 0;
   /* zero the width, not just the colour — a transparent 1px rule still takes up
      a pixel per row, which stacks into a visible gap under a collapsed section */
+  border-top-width: 0;
   border-bottom-width: 0;
   /* the cells' own line box would otherwise hold the row ~19px open */
   line-height: 0;
   font-size: 0;
+  overflow: hidden;
+  box-shadow: none;
 }
 .grid .grid__row--hidden > td > * { max-height: 0; opacity: 0; overflow: hidden; }
 /* a border-box element can't shrink below its own padding, so zero that too or
@@ -2263,7 +2301,13 @@ body {
   color: inherit;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-standard);
+  overflow: hidden;
 }
+/* a pill inset inside its cell, clear of the balance rule */
+.grid .balcell { height: 24px; margin: 0; padding: 0 6px; border-radius: var(--r-sm); line-height: 24px; vertical-align: middle; }
+/* the handle stays visible in narrow columns */
+.balcell--compact { gap: 2px; }
+.balcell--compact .balcell__chev { width: 9px; height: 9px; }
 .balcell__chev {
   flex: none;
   color: var(--muted);
@@ -2271,9 +2315,12 @@ body {
   transform: rotate(180deg);
   transition: transform var(--dur-base) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
+.grid__cell--balcell { vertical-align: middle; }
 .grid__cell--balcell:hover .balcell { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .grid__cell--balcell:hover .balcell__chev { color: var(--accent); }
 .grid__cell--active .balcell__chev { transform: rotate(0deg); color: var(--accent); }
+/* the handle marks the open pane; the balance row's dashed rule stays the cell's only edge */
+.grid__row--bal > .grid__cell--active { box-shadow: none; }
 .balcell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* --- buttons --------------------------------------------------------------*/
@@ -2996,9 +3043,11 @@ body {
 .balpanel__body { padding: 4px 12px 18px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
 .balpanel__empty { color: var(--muted); font-size: 13px; padding: 12px; }
 .balpanel__foot {
-  padding: 10px 18px 14px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: flex-end;
+  padding: 10px 12px; border-top: 1px solid var(--border);
   font-size: 11.5px; line-height: 1.45; color: var(--muted);
 }
+.balpanel__compact { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-small); color: var(--muted-strong); cursor: pointer; }
 
 /* company band — only drawn when the grid spans more than one */
 .balco__head {
@@ -3010,7 +3059,61 @@ body {
 .balco__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .balco__name { font-weight: var(--fw-semibold); color: var(--muted-strong); }
 .balco__ccy { font-weight: var(--fw-regular); }
-.balco__amt { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); color: var(--muted-strong); letter-spacing: 0; text-transform: none; }
+/* the company total takes the same fixed slot as the account figures, so Open grid
+   lands in one column on header and account rows alike */
+.balco__amt {
+  order: 100; flex: none; width: 92px; margin-left: 0; text-align: right;
+  font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); color: var(--muted-strong); letter-spacing: 0; text-transform: none;
+}
+@container balpanel (max-width: 380px) { .balco__amt { width: 84px; } }
+
+/* Company groups: each company is one contained block — a tinted header band
+   over its accounts, framed by a hairline. One 12px inset runs all the way
+   round: pane edge to box, header text, account rows. */
+.balpanel__body:has(> .balco--group) { padding: 12px; gap: 10px; }
+.balpanel__body:not(:has(> .balco--group)) { padding-left: 0; padding-right: 0; }
+.balco--group {
+  flex: none; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--panel); overflow: hidden;
+}
+/* header: fold toggle + Open grid + total; hover drives the chart path */
+.balco--group > .balco__head {
+  width: 100%; min-height: 0; margin: 0; padding: 10px 12px; gap: 8px; border: none; border-bottom: 1px solid var(--border);
+  background: var(--panel-2); font-family: inherit; text-align: left; cursor: default;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.balco--group > .balco__head:hover { background: color-mix(in srgb, var(--ink) 5%, var(--panel-2)); }
+.balco--group > .balco__head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.balco--hover > .balco__head { background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); }
+.balco--group .balco__name, .balco--group .balco__amt { color: var(--ink); }
+.balco--group .balco__dot { width: 8px; height: 8px; }
+.balco__toggle {
+  display: inline-flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
+  margin: -4px 0; padding: 4px 0; border: none; background: transparent; color: inherit;
+  font: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left; cursor: pointer;
+}
+.balco__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.balco__toggle .balco__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.balco__chev { flex: none; color: var(--muted); margin-left: -2px; transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1); }
+.balco--folded .balco__chev { transform: rotate(-90deg); }
+.balco__count {
+  display: none; height: 16px; padding: 0 6px; border-radius: var(--r-pill); background: var(--panel);
+  border: 1px solid var(--border); font-size: 10px; line-height: 14px; letter-spacing: 0; color: var(--muted);
+}
+.balco--folded .balco__count { display: inline-block; }
+/* the fold: rows collapse by grid track, so any number of accounts animates */
+.balco__rows { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(0.32, 0.72, 0, 1); }
+.balco__rowsin { min-height: 0; overflow: hidden; transition: opacity 200ms var(--ease-standard); }
+.balco--folded .balco__rows { grid-template-rows: 0fr; }
+.balco--folded .balco__rowsin { opacity: 0; }
+.balco--folded > .balco__head { border-bottom-color: transparent; }
+/* the box frame ends the last row */
+.balco--group .balacct:last-child { border-bottom: none; }
+.balco--group .balacct + .balacct { border-top: none; }
+@media (prefers-reduced-motion: reduce) { .balco__rows, .balco__rowsin, .balco__chev { transition: none; } }
+:root[data-skin~='enterprise'] .balco--group { border-radius: var(--r-sm); }
+:root[data-skin~='enterprise'] .balco--group > .balco__head { text-transform: none; letter-spacing: 0; font-size: 12px; }
+:root[data-skin~='enterprise'] .balco--hover > .balco__head { background: color-mix(in srgb, var(--brand) 8%, var(--panel-2)); }
 
 .balacct {
   position: relative; display: block; width: 100%; text-align: left;
@@ -3694,6 +3797,8 @@ body {
 .metric:hover { background: color-mix(in srgb, var(--panel-2) 45%, transparent); }
 .metric:first-child:hover { background: transparent; }
 .metric__value { font-size: 26px; }
+/* KPIs showing one account / company (chart path) */
+.metrics--path .metric__value { transition: color var(--dur-fast) var(--ease-standard); }
 .metric--finding { border-color: var(--border); box-shadow: inset 0 -2px 0 var(--brand); }
 
 /* timeframe change: the table steps back under a spinner while the chart morphs */
@@ -3772,7 +3877,8 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 
 /* loader: fixed spot just below the chart, centred on the visible width — independent of table height */
 .tablebusy__stick { align-items: flex-start; padding-top: 88px; box-sizing: border-box; }
-.tablewrap { min-height: 200px; }
+/* no floor: with every section folded the foot sits right under Outflow */
+.tablewrap { min-height: 0; }
 
 /* title row: an 80px band flush between the navigator line and the KPI line, everything on one centre */
 .app__header { padding: 0; min-height: 80px; margin: -16px 0; }
@@ -3829,15 +3935,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
   box-shadow: inset -1px 0 0 color-mix(in srgb, var(--uniun-green) 70%, transparent), inset 0 1px 0 color-mix(in srgb, var(--uniun-green) 70%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--uniun-green) 70%, transparent);
 }
 .grid__rowhead--pick:hover { background: color-mix(in srgb, var(--uniun-green) 6%, var(--panel)); }
-
-/* opening/closing rules: same weight as the chart's balance line */
-.grid__row--bal .grid__rowhead,
-.grid__row--bal .grid__cell {
-  /* drawn as an inset shadow: a fractional collapsed border loses to the grey rule above */
-  border-top: 1px solid transparent;
-  box-shadow: inset 0 1.5px 0 var(--brand);
-  padding-top: 10px;
-}
 
 /* --- grouping tray (1c) --------------------------------------------------------
    Group toggles a tray inside the grid frame, directly under the header row. */
@@ -4421,7 +4518,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
    cool greys, one calm blue accent, plain sentence-case labels,
    regular-weight type and tighter rows. Always light.
    ============================================================ */
-.skinbtn--on { color: var(--brand) !important; }
 :root[data-skin~='enterprise'] {
   --bg: #f4f5f6; --panel: #ffffff; --panel-2: #eef0f2; --ink: #1d2733; --muted: #5b6b7c; --muted-strong: #354250;
   --border: #d9dee3; --border-strong: #c3cbd3; --grid: #eceff2;
@@ -4456,7 +4552,7 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 :root[data-skin~='enterprise'] .grid .grid__cell { padding-top: 3px; padding-bottom: 3px; }
 :root[data-skin~='enterprise'] .grid__row--item .cell--agg { color: var(--brand); }
 :root[data-skin~='enterprise'] .grid__row--item .cell--agg.is-neg, :root[data-skin~='enterprise'] .cell.is-neg { color: var(--neg); }
-:root[data-skin~='enterprise'] .grid__row--bal .grid__rowhead, :root[data-skin~='enterprise'] .grid__row--bal .grid__cell { background: #f2f4f6; box-shadow: inset 0 1px 0 var(--border-strong); }
+:root[data-skin~='enterprise'] .grid__row--bal .grid__rowhead, :root[data-skin~='enterprise'] .grid__row--bal .grid__cell { background: #f2f4f6; }
 :root[data-skin~='enterprise'] .catcap { border-radius: var(--r-sm); }
 /* controls: blue primary, outlined secondary, 4px corners */
 :root[data-skin~='enterprise'] :is(.groupbtn__btn--on, .titlenav--on) { color: #fff; }
@@ -4468,13 +4564,17 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 :root[data-skin~='enterprise'] .gbadge { background: #f4f6f8; }
 :root[data-skin~='enterprise'] .seg__pill { box-shadow: none; }
 :root[data-skin~='enterprise'] .seg__btn--on { color: #fff; }
+:root[data-skin~='enterprise'] .app__controls .app__mult { border-radius: var(--r-md); }
+:root[data-skin~='enterprise'] .balpanel__total-val { font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: 0; }
+:root[data-skin~='enterprise'] .balpanel__total-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+:root[data-skin~='enterprise'] .skinmenu__title { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ink); }
 
 /* closed drawers sit just off-screen — their shadows must not bleed into the page */
 .shockspanel:not(.shockspanel--open), .balpanel:not(.balpanel--open), .outpanel:not(.outpanel--open), .underpanel:not(.underpanel--open) { box-shadow: none !important; }
 
 /* Enterprise: category capsules read as plain labels — no pill outline or fill */
 /* every skin: category capsules read as plain labels — no pill outline or fill */
-.catcap, .catcap:hover { border-color: transparent !important; background: transparent !important; box-shadow: none !important; padding-left: 0; }
+.catcap, .catcap:hover { border-color: transparent !important; background: transparent !important; box-shadow: none !important; padding-top: 0; padding-bottom: 0; padding-left: 0; }
 
 /* Enterprise: collapsed rows fold to nothing — the denser cell padding must not resurrect them as empty bands */
 :root[data-skin~='enterprise'] .grid .grid__row--hidden > .grid__rowhead,
@@ -4516,14 +4616,146 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .app:has(.underpanel--open:hover) :is(.aligned, .metrics, .app__header, .gnavwrap, .scenariobar) { opacity: 0.4; filter: saturate(0.5); }
 .underpanel--open:hover { box-shadow: -12px 0 32px rgba(0, 0, 0, 0.14); }
 
-/* Balance, section and movement rows sit at the same height as item rows in every skin */
-.grid .grid__section > td, .grid .grid__row--move > td, .grid .grid__row--bal > td { padding-top: 4px; padding-bottom: 4px; }
-.grid .grid__row--bal > td { padding-top: 4px; padding-bottom: 5px; }
+/* One grid geometry for every skin: every body row is 32px — items, sections,
+   movement and the sticky foot alike — and balance rows 36px. The cell height is
+   the row; vertical padding is dropped so content can't push a row taller, and
+   every rule is 1px. Skins differ in colour and type only; folded rows stay 0.
+   (The :root prefix outranks the skins' denser cell padding.) */
+:root .grid tbody > tr:not(.grid__row--hidden):not(.grouptray__row) > td {
+  height: 32px; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 1px;
+}
+/* Balance rows bookend the flows with a dashed rule on the side facing the items:
+   under Opening, over Closing. */
+:root .grid tbody > tr.grid__row--opening:not(.grid__row--hidden):not(.grouptray__row) > td { height: 36px; border-bottom: 1px dashed var(--border-strong); }
+:root .grid tbody > tr.grid__row--closing:not(.grid__row--hidden):not(.grouptray__row) > td { height: 36px; border-top: 1px dashed var(--border-strong); }
+/* collapsed borders: a solid neighbour beats a dashed one, so the row above Closing gives its edge up entirely */
+:root .grid tbody > tr:has(+ tr.grid__row--closing) > td { border-bottom: none; }
 /* Enterprise: the grey band of section / movement rows carries into the sticky label column */
 :root[data-skin~='enterprise'] .grid__section > .grid__rowhead,
 :root[data-skin~='enterprise'] .grid__row--move > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 3.5%, var(--panel)); }
 :root[data-skin~='enterprise'] .grid__section:hover > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 5.5%, var(--panel)); }
-:root[data-skin~='enterprise'] .grid .grid__section > td, :root[data-skin~='enterprise'] .grid .grid__row--move > td, :root[data-skin~='enterprise'] .grid .grid__row--bal > td { padding-top: 3px; padding-bottom: 3px; }
+
+/* Enterprise: blue Open grid / currency tick / switch / period ghost (FIS below re-points these) */
+:root[data-skin~='enterprise'] .balacct__open { border-radius: var(--r-sm); }
+:root[data-skin~='enterprise'] .balacct__open:hover { color: #fff; background: var(--brand); border-color: var(--brand); }
+:root[data-skin~='enterprise'] .ccypick__opt--on, :root[data-skin~='enterprise'] .ccypick__opt--on:hover { background: #e8f1fb; }
+:root[data-skin~='enterprise'] .ccypick__tick { color: var(--brand); }
+:root[data-skin~='enterprise'] .vswitch--on { background: var(--brand); border-color: var(--brand); }
+:root[data-skin~='enterprise'] .vswitch--on .vswitch__knob { background: #fff; }
+:root[data-skin~='enterprise'] .seg__ghost { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+
+/* ============================================================
+   FIS skin — layered on Enterprise (same density, plain labels),
+   matched to fisglobal.com: deep indigo chrome, FIS green pills,
+   light display type. FIS navy carries ink and primary controls;
+   FIS green is a fill/indicator colour, with a deeper green for text.
+   ============================================================ */
+:root[data-skin~='fis'] {
+  --fis-navy: #1d1e4b; --fis-indigo-2: #2a2c66; --fis-green: #4bcd3e; --fis-green-ink: #23801a; --fis-tint: #eaf7e8; --fis-tint-2: #d9f1d5;
+  --bg: #f6f6fa; --panel: #ffffff; --panel-2: #f0f0f6; --ink: #1d1e4b; --muted: #5e6080; --muted-strong: #33355e;
+  --border: #dcdce8; --border-strong: #c6c7d9; --grid: #ececf3;
+  --rail-bg: #1d1e4b; --rail-ink: #ffffff;
+  --brand: #1d1e4b; --app-forecast: #4bcd3e; --accent: #237a1a; --accent-fill: #4bcd3e; --accent-ink: #1d1e4b;
+  --uniun-green: #4bcd3e; --uniun-green-light: #eaf7e8;
+  --pos: #237a1a; --neg: #c8102e;
+  /* chart: actuals in blue, the forecast in FIS green */
+  --chart-actual: #2f6fd6; --chart-forecast: #4bcd3e;
+  --font-sans: 'Manrope', 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+  --shadow: 0 1px 2px rgba(1, 40, 52, 0.06); --shadow-2: 0 2px 6px rgba(1, 40, 52, 0.08); --shadow-3: 0 6px 18px rgba(1, 40, 52, 0.14);
+}
+:root[data-skin~='fis'] ::selection { background: var(--fis-green); color: var(--fis-navy); }
+/* rail: the site's indigo top bar, the FIS logo, green current-app badge */
+:root[data-skin~='fis'] .rail { background: var(--fis-navy); border-right-color: var(--fis-navy); }
+:root[data-skin~='fis'] .rail .rail__brand img { display: none; }
+:root[data-skin~='fis'] .rail .rail__brand .rail__mark--fis { display: block; height: 52px; width: 52px; margin: -6px 0; }
+:root[data-skin~='fis'] .railapp__badge { background: var(--fis-green); color: var(--fis-navy); font-weight: 600; }
+:root[data-skin~='fis'] .railapp--on::before { background: var(--fis-green); }
+:root[data-skin~='fis'] .rail .themebtn, :root[data-skin~='fis'] .railpulse { color: #c9cae6; }
+:root[data-skin~='fis'] .rail .themebtn:hover, :root[data-skin~='fis'] .skinmenu--open .themebtn { color: #fff; background: var(--fis-indigo-2); }
+:root[data-skin~='fis'] .railhelp { background: var(--fis-indigo-2); color: #fff; }
+:root[data-skin~='fis'] .railhelp:hover { background: #3a3d82; }
+:root[data-skin~='fis'] .railavatar { background: var(--fis-indigo-2); color: #fff; }
+/* display type: light, like the site's hero */
+:root[data-skin~='fis'] .app__header h1 { font-weight: 300; font-size: 28px; letter-spacing: -0.01em; }
+:root[data-skin~='fis'] .metric__value, :root[data-skin~='fis'] .balpanel__total-val { font-weight: 300; }
+/* the active view tab takes the short green rule the site puts under section labels */
+:root[data-skin~='fis'] .viewtabs__ink, :root[data-skin~='fis'] .tab--summary.tab--on { background: var(--fis-green); border-bottom-color: var(--fis-green); }
+:root[data-skin~='fis'] .viewtabs__ink { height: 3px; border-radius: 0; }
+:root[data-skin~='fis'] .tab__sigma { color: var(--fis-green-ink); }
+/* controls: green pills, navy label */
+:root[data-skin~='fis'] .seg, :root[data-skin~='fis'] .seg__btn, :root[data-skin~='fis'] .seg__pill { border-radius: 999px; }
+:root[data-skin~='fis'] .seg__btn--on, :root[data-skin~='fis'] :is(.groupbtn__btn--on, .titlenav--on) { background: var(--fis-green); color: var(--fis-navy); }
+:root[data-skin~='fis'] .seg__ghost { background: color-mix(in srgb, var(--fis-green) 18%, transparent); border-radius: 999px; }
+:root[data-skin~='fis'] .viewmenu__btn, :root[data-skin~='fis'] .expandbtn, :root[data-skin~='fis'] .app__controls .app__mult, :root[data-skin~='fis'] .ccypick__btn { border-radius: 999px; }
+:root[data-skin~='fis'] .vswitch--on { background: var(--fis-green); border-color: var(--fis-green); }
+:root[data-skin~='fis'] .vswitch--on .vswitch__knob { background: #fff; }
+:root[data-skin~='fis'] .entpick__btn { color: var(--fis-navy); border-color: var(--border-strong); background: var(--panel); }
+:root[data-skin~='fis'] .entpick__btn--on, :root[data-skin~='fis'] .entpick__btn:hover, :root[data-skin~='fis'] .entpick--open .entpick__btn { background: var(--fis-tint); border-color: var(--fis-green); }
+:root[data-skin~='fis'] .pill--readonly { background: var(--fis-tint); color: var(--fis-green-ink); }
+/* figures: navy on item rows rather than a brand blue */
+:root[data-skin~='fis'] .grid__row--item .cell--agg { color: var(--fis-navy); }
+:root[data-skin~='fis'] .grid__row--bal .grid__rowhead, :root[data-skin~='fis'] .grid__row--bal .grid__cell { background: #eef3f3; }
+:root[data-skin~='fis'] .grid__row--bal > .grid__rowhead { background-color: #eef3f3; }
+/* replace Enterprise's blue tints with FIS green tints */
+:root[data-skin~='fis'] .gitem--on, :root[data-skin~='fis'] .gsaved--on, :root[data-skin~='fis'] .groute__opt--on, :root[data-skin~='fis'] .ccypick__opt--on, :root[data-skin~='fis'] .ccypick__opt--on:hover { background: var(--fis-tint); }
+:root[data-skin~='fis'] .ccypick__tick { color: var(--fis-green-ink); }
+:root[data-skin~='fis'] .balacct--hover { background: var(--fis-tint); box-shadow: inset 2px 0 0 var(--fis-green); }
+:root[data-skin~='fis'] .grid__row--focused > .grid__rowhead, :root[data-skin~='fis'] .grid__row--lit > .grid__rowhead { background-color: var(--fis-tint-2); }
+:root[data-skin~='fis'] .grid__row--focused > .grid__cell { background: var(--fis-tint); }
+:root[data-skin~='fis'] .grid__row--item:has(.grid__rowhead--pick:hover) > .grid__rowhead { background: #f2faf1; }
+:root[data-skin~='fis'] .gload--band.gload--ready { color: var(--fis-navy); box-shadow: inset 0 0 0 1px var(--fis-navy); }
+:root[data-skin~='fis'] .gload--band.gload--ready:hover, :root[data-skin~='fis'] .gload--band.gload--busy { background: var(--fis-navy); color: #fff; }
+:root[data-skin~='fis'] .balacct__open:hover { color: #fff; background: var(--fis-navy); border-color: var(--fis-navy); }
+:root[data-skin~='fis'] .chart__line, :root[data-skin~='fis'] .chart__marker, :root[data-skin~='fis'] .chart__hoverdot { stroke: var(--fis-green); }
+:root[data-skin~='fis'] .chart__marker, :root[data-skin~='fis'] .chart__hoverdot { fill: var(--fis-green); stroke: var(--panel); }
+:root[data-skin~='fis'] .chart__grad-top, :root[data-skin~='fis'] .chart__grad-bottom { stop-color: var(--fis-green); }
+
+/* ============================================================
+   FIS - Dark: the site's deep indigo as the page, FIS green as the
+   accent. Layered over FIS (which itself sits on Enterprise), so every
+   light literal those skins hard-code is re-pointed here.
+   ============================================================ */
+:root[data-skin~='fis'][data-theme='dark'] {
+  --bg: #10112e; --panel: #16173d; --panel-2: #1e2050; --ink: #f1f2fa; --muted: #9b9dc6; --muted-strong: #cfd0ea;
+  --border: #2b2d62; --border-strong: #3b3e7c; --grid: #222458;
+  --rail-bg: #0c0d26; --rail-ink: #ffffff;
+  --brand: #4bcd3e; --accent: #6fdc63; --accent-fill: #4bcd3e; --accent-ink: #0c0d26;
+  --fis-navy: #0c0d26; --fis-green-ink: #6fdc63; --fis-tint: #1d3a3a; --fis-tint-2: #23463f;
+  --pos: #6fdc63; --neg: #ff6b6b;
+  --chart-actual: #6f9cf5; --chart-forecast: #4bcd3e;
+  --outlier-ink: #22d3ee;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5); --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5); --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --scroll-thumb: #34376e; --scroll-thumb-hover: #4a4e94;
+  color-scheme: dark;
+}
+:root[data-skin~='fis'][data-theme='dark'] .rail { background: var(--rail-bg); border-right-color: var(--border); }
+:root[data-skin~='fis'][data-theme='dark'] .railhelp, :root[data-skin~='fis'][data-theme='dark'] .railavatar { background: #23255a; }
+:root[data-skin~='fis'][data-theme='dark'] .rail .themebtn:hover, :root[data-skin~='fis'][data-theme='dark'] .skinmenu--open .themebtn { background: #23255a; }
+/* on dark, navy text on green stays; navy-filled controls flip to light */
+:root[data-skin~='fis'][data-theme='dark'] .seg__btn--on, :root[data-skin~='fis'][data-theme='dark'] :is(.groupbtn__btn--on, .titlenav--on) { background: var(--fis-green); color: #0c0d26; }
+:root[data-skin~='fis'][data-theme='dark'] .vswitch--on .vswitch__knob { background: #0c0d26; }
+:root[data-skin~='fis'][data-theme='dark'] .entpick__btn { color: var(--ink); }
+:root[data-skin~='fis'][data-theme='dark'] .grid__row--item .cell--agg { color: var(--ink); }
+:root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--ready { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--border-strong); }
+:root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--ready:hover, :root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--busy { background: var(--fis-green); color: #0c0d26; }
+:root[data-skin~='fis'][data-theme='dark'] .balacct__open:hover { color: #0c0d26; background: var(--fis-green); border-color: var(--fis-green); }
+/* Enterprise's light wells and zebra, re-pointed to the dark palette */
+:root[data-skin~='fis'][data-theme='dark'] .grid__row--bal .grid__rowhead, :root[data-skin~='fis'][data-theme='dark'] .grid__row--bal .grid__cell, :root[data-skin~='fis'][data-theme='dark'] .grid__row--bal > .grid__rowhead { background: var(--panel-2); background-color: var(--panel-2); }
+:root[data-skin~='fis'][data-theme='dark'] .grid__rowhead:not([style*='background']) { background-color: var(--panel); }
+:root[data-skin~='fis'][data-theme='dark'] .grid__section > .grid__rowhead, :root[data-skin~='fis'][data-theme='dark'] .grid__row--move > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 4%, var(--panel)); }
+:root[data-skin~='fis'][data-theme='dark'] .grid__row--item:has(.grid__rowhead--pick:hover) > .grid__rowhead { background: color-mix(in srgb, var(--fis-green) 10%, var(--panel)); }
+:root[data-skin~='fis'][data-theme='dark'] .gnavwrap, :root[data-skin~='fis'][data-theme='dark'] .gband__route, :root[data-skin~='fis'][data-theme='dark'] .gcol--on, :root[data-skin~='fis'][data-theme='dark'] .gcol:not(.gcol--idle):hover, :root[data-skin~='fis'][data-theme='dark'] .gcol__more { background: var(--panel); }
+:root[data-skin~='fis'][data-theme='dark'] .gband, :root[data-skin~='fis'][data-theme='dark'] .gcol, :root[data-skin~='fis'][data-theme='dark'] .grouptray__row > td.grouptray__cell { background: var(--bg); }
+:root[data-skin~='fis'][data-theme='dark'] .gbadge { background: var(--panel-2); }
+:root[data-skin~='fis'][data-theme='dark'] .app__controls .seg, :root[data-skin~='fis'][data-theme='dark'] .app__controls .viewmenu__btn, :root[data-skin~='fis'][data-theme='dark'] .app__controls .app__mult, :root[data-skin~='fis'][data-theme='dark'] .app__header .app__ccy,
+:root[data-skin~='fis'][data-theme='dark'] .app__header .ccypick__btn:hover, :root[data-skin~='fis'][data-theme='dark'] .app__header .ccypick--open .ccypick__btn { background: var(--panel-2); border-color: var(--border-strong); }
+:root[data-skin~='fis'][data-theme='dark'] .skinmenu__sw { border-color: var(--border-strong); }
+:root[data-skin~='fis'][data-theme='dark'] ::selection { background: var(--fis-green); color: #0c0d26; }
+
+/* brand is the FIS green, so anything filled with it takes dark ink */
+:root[data-skin~='fis'][data-theme='dark'] .metric__find--on, :root[data-skin~='fis'][data-theme='dark'] .metric__find--on:hover { color: #0c0d26; }
+:root[data-skin~='fis'][data-theme='dark'] .gchip--home, :root[data-skin~='fis'][data-theme='dark'] .gchip--home:hover { color: #0c0d26; }
+:root[data-skin~='fis'][data-theme='dark'] .tab--summary.tab--on { color: var(--ink); }
 
 /* Net movement / Sweep / Closing balance strip: native sticky, pinned to the viewport bottom */
 .gridfoot {
@@ -4591,49 +4823,85 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 :root[data-skin~='enterprise'] .viewmenu--open .viewmenu__btn { border-color: var(--brand); }
 :root[data-skin~='enterprise'] .viewmenu__title { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ink); }
 
-/* account shortcut: appears on hover, opens that account's grid (breadcrumb back) */
+/* Open grid: one slot at the far right of every row (account and company), just
+   before the figures, which stay pinned at the right edge. It folds open leftwards
+   on hover, so only the name side gives way, and floats inside the row's existing
+   line box, so nothing reflows. It opens that account's grid (breadcrumb back). */
 .balacct { cursor: default; }
-.balacct__name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .balacct__open {
+  order: 99; flex: none; align-self: center;
   display: inline-flex; align-items: center; gap: 5px;
-  height: 22px; padding: 0 8px; margin-left: 4px;
-  border: 1px solid var(--border-strong); border-radius: 999px;
+  height: 0; max-width: 0; padding: 0; margin: 0 -8px 0 0; overflow: hidden;
+  border: 0 solid var(--border-strong); border-radius: var(--r-pill);
   background: var(--panel); color: var(--muted-strong);
   font: inherit; font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: 0; text-transform: none;
   cursor: pointer; white-space: nowrap;
-  opacity: 0; transform: translateX(-4px); pointer-events: none;
-  transition: opacity var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+  opacity: 0; transform: translateX(10px); pointer-events: none;
+  transition: max-width 240ms cubic-bezier(0.32, 0.72, 0, 1), padding 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    margin-left 240ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard), transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
 }
-.balacct:hover .balacct__open, .balacct__open:focus-visible { opacity: 1; transform: none; pointer-events: auto; }
+.balacct:hover .balacct__open, .balco__head:hover .balacct__open, .balacct__open:focus-visible {
+  height: 24px; max-width: 110px; padding: 0 10px 0 8px; margin: -2px 0; border-width: 1px;
+  opacity: 1; transform: none; pointer-events: auto;
+}
 .balacct__open:hover { color: var(--accent-ink); background: var(--accent-fill); border-color: var(--accent-fill); }
-:root[data-skin~='enterprise'] .balacct__open { border-radius: var(--r-sm); }
-:root[data-skin~='enterprise'] .balacct__open:hover { color: #fff; background: var(--brand); border-color: var(--brand); }
+/* Chart path: hovering previews the account, so no Open grid */
+.balpanel--path .balacct__open { display: none; }
+@media (prefers-reduced-motion: reduce) { .balacct__open { transition: opacity 120ms; } }
 
-/* Collapsed by default: name + amount on one light line. The secondary level
-   (account no., bank / ccy / pool, share or movement) folds open on hover — in
-   either pane, since cross-pane focus sets .balacct--hover on both. */
-.balacct__body { padding: 7px 8px; align-items: flex-start; transition: padding 220ms var(--ease-standard); }
-.balacct__name { font-weight: var(--fw-medium); transition: font-weight 0s; }
-.balacct__amt { font-weight: var(--fw-medium); color: var(--muted-strong); transition: color 200ms var(--ease-standard); }
-.balacct__main, .balacct__figs { gap: 0; }
-.balacct__meta, .balacct__sub {
-  max-height: 0; opacity: 0; margin-top: 0; overflow: hidden;
-  transform: translateY(-3px);
-  transition: max-height 240ms var(--ease-standard), opacity 180ms var(--ease-standard), margin-top 240ms var(--ease-standard), transform 240ms var(--ease-standard);
-}
-.balacct__no { opacity: 0; transition: opacity 180ms var(--ease-standard); }
+/* Account rows: no hover unfolding — hover is paint-only. Compact shows name +
+   amount; detail adds the bank / ccy / pool line and the share / movement line,
+   always on. One row inset in every mode: 12px sides. */
+.balacct__body { min-height: 0; padding: 8px 12px; gap: 8px; transition: background var(--dur-fast) var(--ease-standard); }
+.balpanel--path .balco--group .balacct__body { padding-top: 7px; padding-bottom: 7px; }
+.balacct__main { flex: 1 1 auto; min-width: 120px; min-height: 20px; justify-content: center; gap: 0; }
+/* name row: the name ellipsises first; badges never clip */
+.balacct__name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; overflow: visible; font-weight: var(--fw-medium); }
+.balacct__nametext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.balacct__name .gbadge, .balacct__name .balsweep { flex: none; }
+/* the figures take a fixed-width slot, so every sparkline starts at the same x
+   regardless of the amount beside it */
+.balacct__figs { order: 100; width: 92px; gap: 0; }
+@container balpanel (max-width: 380px) { .balacct__figs { width: 84px; } }
+.balacct__amt { font-weight: var(--fw-medium); color: var(--muted-strong); }
+.balacct:hover .balacct__amt, .balacct--hover .balacct__amt, .balacct--on .balacct__amt { color: var(--ink); }
+.balacct__meta, .balacct__sub { overflow: hidden; }
+.balpanel--compact .balacct :is(.balacct__meta, .balacct__sub) { display: none; }
+.balpanel--detail .balacct :is(.balacct__meta, .balacct__sub) { display: flex; margin-top: 3px; }
 .balacct__bar { height: 1px; opacity: 0.35; transition: height 220ms var(--ease-standard), opacity 220ms var(--ease-standard); }
-.balacct:hover .balacct__body, .balacct--hover .balacct__body, .balacct--on .balacct__body { padding: 10px 8px; }
-.balacct:hover .balacct__name, .balacct--hover .balacct__name, .balacct--on .balacct__name { font-weight: 600; }
-.balacct:hover .balacct__amt, .balacct--hover .balacct__amt, .balacct--on .balacct__amt { color: var(--ink); font-weight: var(--fw-semibold); }
-.balacct:hover :is(.balacct__meta, .balacct__sub),
-.balacct--hover :is(.balacct__meta, .balacct__sub),
-.balacct--on :is(.balacct__meta, .balacct__sub) { max-height: 20px; opacity: 1; margin-top: 3px; transform: none; }
-.balacct:hover .balacct__no, .balacct--hover .balacct__no, .balacct--on .balacct__no { opacity: 1; }
 .balacct:hover .balacct__bar, .balacct--hover .balacct__bar, .balacct--on .balacct__bar { height: 2px; opacity: 0.6; }
-@media (prefers-reduced-motion: reduce) {
-  .balacct__body, .balacct__meta, .balacct__sub, .balacct__no, .balacct__bar { transition: none; }
+@media (prefers-reduced-motion: reduce) { .balacct__bar { transition: none; } }
+
+/* Sweep marker on zero-balancing pool accounts: an icon-only circle in the Sweep
+   row's cyan; the styled tip names it */
+.balsweep {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;
+  border-radius: 50%; background: color-mix(in srgb, var(--outlier) 12%, var(--panel));
+  color: var(--outlier-ink); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: 0; line-height: 1; white-space: nowrap;
 }
+.balsweep--header { color: var(--panel); background: var(--outlier-ink); }
+.balsweep[data-tip]::after { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); font-size: var(--fs-micro); padding: 5px 8px; }
+.balsweep[data-tip]::before { top: auto; bottom: calc(100% + 3px); left: 50%; margin-left: -5px; border-bottom-color: transparent; border-top-color: color-mix(in srgb, var(--ink) 92%, var(--panel)); }
+
+/* Sparklines belong to Chart path: shown only while it's on, quiet grey at rest,
+   lining up in one column ahead of the figures. The account's colour is set
+   inline, so the greys need !important. */
+.balspark {
+  flex: none; align-self: center; overflow: visible; max-width: 72px; margin-left: auto; margin-right: -2px;
+  transition: max-width 240ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard), margin 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.balpanel:not(.balpanel--path) .balspark { display: none; }
+@container balpanel (max-width: 340px) { .balspark { display: none; } }
+.balspark__line {
+  fill: none; stroke: var(--muted) !important; stroke-opacity: 0.55; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round;
+  transition: stroke-opacity var(--dur-fast) var(--ease-standard);
+}
+.balspark__zero { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 2; }
+.balspark__dot { fill: var(--muted) !important; fill-opacity: 0.7; stroke: var(--panel); stroke-width: 1; }
+.balacct:hover .balspark__line, .balacct--hover .balspark__line, .balacct--on .balspark__line { stroke: var(--muted-strong) !important; stroke-opacity: 0.9; }
+.balacct:hover .balspark__dot, .balacct--hover .balspark__dot, .balacct--on .balspark__dot { fill: var(--muted-strong) !important; fill-opacity: 1; }
+.balspark--neg .balspark__line { stroke: color-mix(in srgb, var(--neg) 55%, var(--muted)) !important; }
 
 .balpanel__close { flex: none; }
 
@@ -4666,7 +4934,7 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .balpanel__titles { flex-direction: row; align-items: center; }
 .balpanel__title { font-size: var(--fs-small); font-weight: var(--fw-semibold); }
 .balpanel__total {
-  box-sizing: border-box; height: var(--chrome-band, 80px); flex: none;
+  position: relative; box-sizing: border-box; height: var(--chrome-band, 80px); flex: none;
   flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px;
   padding: 0 18px; background: var(--bg); border-bottom: 1px solid var(--border);
 }
@@ -4674,8 +4942,25 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .balpanel__total-label { display: flex; flex-wrap: wrap; gap: 0 8px; }
 .balpanel__total-scope { color: var(--muted-strong); }
 .balpanel__total-scope::after { content: '·'; margin-left: 8px; color: var(--muted); }
-:root[data-skin~='enterprise'] .balpanel__total-val { font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: 0; }
-:root[data-skin~='enterprise'] .balpanel__total-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+/* Chart path toggle: sits on the total figure's line, not the band's centre */
+.chartpathbtn {
+  position: absolute; top: calc(50% - 10px); right: 14px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 6px; height: var(--chip-h); padding: 0 6px 0 10px;
+  border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--panel); color: var(--muted-strong);
+  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); letter-spacing: 0; cursor: pointer; white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.chartpathbtn:hover { color: var(--ink); border-color: var(--border-strong); }
+.chartpathbtn__state {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: var(--r-pill);
+  background: var(--panel-2); color: var(--muted); font-size: var(--fs-micro); font-weight: var(--fw-semibold);
+}
+.chartpathbtn--on { border-color: var(--accent-fill); color: var(--ink); }
+.chartpathbtn--on .chartpathbtn__state { background: var(--accent-fill); color: var(--accent-ink); }
+:root[data-skin~='enterprise']:not([data-skin~='fis']) .chartpathbtn { border-radius: var(--r-sm); }
+:root[data-skin~='enterprise']:not([data-skin~='fis']) .chartpathbtn--on .chartpathbtn__state { color: #fff; }
+@container balpanel (max-width: 360px) { .chartpathbtn { font-size: 0; gap: 4px; } .chartpathbtn svg { width: 14px; height: 14px; } }
 
 .balpanel__actions { display: inline-flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
 .balpanel__back { max-width: 200px; min-width: 0; }
@@ -4725,7 +5010,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
   border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel-2);
   font-size: var(--fs-small); font-weight: var(--fw-semibold); letter-spacing: 0; color: var(--muted-strong);
 }
-:root[data-skin~='enterprise'] .app__controls .app__mult { border-radius: var(--r-md); }
 
 /* Currency picker at rest: no fill or frame, just a quiet code + caret beside the
    title. Hover / focus / open bring the full control shell in. */
@@ -4821,8 +5105,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .ccypick__sym { color: var(--muted); }
 .ccypick__tick { margin-left: auto; flex: none; color: var(--accent); }
 .ccypick__opt--on, .ccypick__opt--on:hover { background: var(--panel-2); color: var(--ink); }
-:root[data-skin~='enterprise'] .ccypick__opt--on, :root[data-skin~='enterprise'] .ccypick__opt--on:hover { background: #e8f1fb; }
-:root[data-skin~='enterprise'] .ccypick__tick { color: var(--brand); }
 @media (prefers-reduced-motion: reduce) { .ccypick__menu { animation: none; } }
 
 .ccypick__menu { left: -1px; }
@@ -4839,8 +5121,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 }
 .vswitch--on { background: var(--accent-fill); border-color: var(--accent-fill); }
 .vswitch--on .vswitch__knob { transform: translateX(16px); background: var(--accent-ink); }
-:root[data-skin~='enterprise'] .vswitch--on { background: var(--brand); border-color: var(--brand); }
-:root[data-skin~='enterprise'] .vswitch--on .vswitch__knob { background: #fff; }
 .vswitch:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent); }
 
 /* weekends badge: same fold-in behaviour as the 000s badge */
@@ -4854,7 +5134,6 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
   transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1), width 260ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard);
 }
 .seg__ghost--on { opacity: 1; }
-:root[data-skin~='enterprise'] .seg__ghost { background: color-mix(in srgb, var(--brand) 12%, transparent); }
 .seg--slide .seg__pill { z-index: 0; }
 @media (prefers-reduced-motion: reduce) { .seg__ghost { transition: opacity 160ms; } }
 
@@ -4936,490 +5215,10 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
   border-top-color: var(--border); border-bottom-color: var(--border);
 }
 .grid .grid__row--bal > td { border-top-color: transparent; }
-:root[data-skin~='enterprise'] .grid__row--bal .grid__rowhead,
-:root[data-skin~='enterprise'] .grid__row--bal .grid__cell { box-shadow: inset 0 1px 0 var(--border); }
-:root[data-skin~='enterprise'] .grid__row--bal > .grid__rowhead { box-shadow: inset 0 1px 0 var(--border), inset -1px 0 0 var(--border); }
 .grid--foot .grid__row--net > td { border-top-color: var(--border); }
-/* the Uniun balance rule keeps its brand colour but drops to the same 1px weight */
-:root:not([data-skin~='enterprise']) .grid__row--bal .grid__rowhead,
-:root:not([data-skin~='enterprise']) .grid__row--bal .grid__cell { box-shadow: inset 0 1px 0 var(--brand); }
-:root:not([data-skin~='enterprise']) .grid__row--bal > .grid__rowhead { box-shadow: inset 0 1px 0 var(--brand), inset -1px 0 0 var(--border); }
 /* The chart leaves 10px under its plot for the bottom axis label. The date row
    sits 7px top / 17px bottom so each date is centred between the plot's bottom
    edge and the header rule; the corner's controls share that centre line. */
 .grid th.grid__colhead { padding-top: 5px; padding-bottom: 17px; }
 .grid th.grid__rowhead--corner { padding-top: 0; padding-bottom: 10px; }
 .grid th.grid__rowhead--corner > .rowhead__inner { position: relative; top: -6px; }
-
-/* ============================================================
-   FIS skin — layered on Enterprise (same density, plain labels,
-   white rail). FIS navy carries ink and primary controls; FIS
-   green is a fill/indicator colour, with a deeper green for text.
-   ============================================================ */
-:root[data-skin~='fis'] {
-  --fis-navy: #012834; --fis-green: #4bcd3e; --fis-green-ink: #237a1a; --fis-tint: #eaf7e8; --fis-tint-2: #d9f1d5;
-  --bg: #f5f7f7; --panel: #ffffff; --panel-2: #eef2f3; --ink: #012834; --muted: #5a6e74; --muted-strong: #2c4650;
-  --border: #d6dfe1; --border-strong: #bfcccf; --grid: #e9eff0;
-  --rail-bg: #ffffff; --rail-ink: #012834;
-  --brand: #012834; --app-forecast: #4bcd3e; --accent: #237a1a; --accent-fill: #4bcd3e; --accent-ink: #012834;
-  --uniun-green: #4bcd3e; --uniun-green-light: #eaf7e8;
-  --pos: #237a1a; --neg: #c8102e;
-  --font-sans: 'Source Sans 3', 'Source Sans Pro', 'Segoe UI', system-ui, sans-serif;
-  --shadow: 0 1px 2px rgba(1, 40, 52, 0.06); --shadow-2: 0 2px 6px rgba(1, 40, 52, 0.08); --shadow-3: 0 6px 18px rgba(1, 40, 52, 0.14);
-}
-:root[data-skin~='fis'] ::selection { background: var(--fis-green); color: var(--fis-navy); }
-:root[data-skin~='fis'] .railapp__badge { background: var(--fis-green); color: var(--fis-navy); font-weight: 600; }
-:root[data-skin~='fis'] .railapp--on::before { background: var(--fis-green); }
-:root[data-skin~='fis'] .rail .themebtn:hover { color: var(--fis-navy); }
-:root[data-skin~='fis'] .skinbtn--on { color: var(--fis-green-ink) !important; }
-/* green indicator under the active view tab, as FIS marks selection */
-:root[data-skin~='fis'] .viewtabs__ink, :root[data-skin~='fis'] .tab--summary.tab--on { background: var(--fis-green); border-bottom-color: var(--fis-green); }
-:root[data-skin~='fis'] .tab__sigma { color: var(--fis-green-ink); }
-/* primary toggles: green fill, navy text */
-:root[data-skin~='fis'] .seg__btn--on, :root[data-skin~='fis'] :is(.groupbtn__btn--on, .titlenav--on) { background: var(--fis-green); color: var(--fis-navy); }
-:root[data-skin~='fis'] .seg__ghost { background: color-mix(in srgb, var(--fis-green) 18%, transparent); }
-:root[data-skin~='fis'] .vswitch--on { background: var(--fis-green); border-color: var(--fis-green); }
-:root[data-skin~='fis'] .vswitch--on .vswitch__knob { background: var(--fis-navy); }
-:root[data-skin~='fis'] .entpick__btn { color: var(--fis-navy); border-color: var(--border-strong); background: var(--panel); }
-:root[data-skin~='fis'] .entpick__btn--on, :root[data-skin~='fis'] .entpick__btn:hover, :root[data-skin~='fis'] .entpick--open .entpick__btn { background: var(--fis-tint); border-color: var(--fis-green); }
-:root[data-skin~='fis'] .pill--readonly { background: var(--fis-tint); color: var(--fis-green-ink); }
-/* figures: navy on item rows rather than a brand blue */
-:root[data-skin~='fis'] .grid__row--item .cell--agg { color: var(--fis-navy); }
-:root[data-skin~='fis'] .grid__row--bal .grid__rowhead, :root[data-skin~='fis'] .grid__row--bal .grid__cell { background: #eef3f3; }
-:root[data-skin~='fis'] .grid__row--bal > .grid__rowhead { background-color: #eef3f3; }
-/* replace Enterprise's blue tints with FIS green tints */
-:root[data-skin~='fis'] .gitem--on, :root[data-skin~='fis'] .gsaved--on, :root[data-skin~='fis'] .groute__opt--on, :root[data-skin~='fis'] .ccypick__opt--on, :root[data-skin~='fis'] .ccypick__opt--on:hover { background: var(--fis-tint); }
-:root[data-skin~='fis'] .ccypick__tick { color: var(--fis-green-ink); }
-:root[data-skin~='fis'] .balacct--hover { background: var(--fis-tint); box-shadow: inset 2px 0 0 var(--fis-green); }
-:root[data-skin~='fis'] .grid__row--focused > .grid__rowhead, :root[data-skin~='fis'] .grid__row--lit > .grid__rowhead { background-color: var(--fis-tint-2); }
-:root[data-skin~='fis'] .grid__row--focused > .grid__cell { background: var(--fis-tint); }
-:root[data-skin~='fis'] .grid__row--item:has(.grid__rowhead--pick:hover) > .grid__rowhead { background: #f2faf1; }
-:root[data-skin~='fis'] .gload--band.gload--ready { color: var(--fis-navy); box-shadow: inset 0 0 0 1px var(--fis-navy); }
-:root[data-skin~='fis'] .gload--band.gload--ready:hover, :root[data-skin~='fis'] .gload--band.gload--busy { background: var(--fis-navy); color: #fff; }
-:root[data-skin~='fis'] .balacct__open:hover { color: #fff; background: var(--fis-navy); border-color: var(--fis-navy); }
-:root[data-skin~='fis'] .chart__line, :root[data-skin~='fis'] .chart__marker, :root[data-skin~='fis'] .chart__hoverdot { stroke: var(--fis-green); }
-:root[data-skin~='fis'] .chart__marker, :root[data-skin~='fis'] .chart__hoverdot { fill: var(--fis-green); stroke: var(--panel); }
-:root[data-skin~='fis'] .chart__grad-top, :root[data-skin~='fis'] .chart__grad-bottom { stop-color: var(--fis-green); }
-:root[data-skin~='fis'] .app__header h1 { font-weight: 600; }
-
-/* balance handle stays visible in narrow columns */
-.balcell { overflow: hidden; }
-.balcell--compact { gap: 2px; padding-left: 0; padding-right: 2px; }
-.balcell--compact .balcell__chev { width: 9px; height: 9px; }
-
-/* ---- Appearance switcher (rail) ---------------------------------------- */
-.skinmenu { position: relative; display: inline-flex; }
-.skinmenu--open .themebtn { color: var(--ink); background: var(--panel-2); }
-.skinmenu__panel {
-  position: absolute; left: calc(100% + 10px); bottom: 0; z-index: 90;
-  width: 210px; padding: 6px; display: flex; flex-direction: column; gap: 1px;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
-  box-shadow: var(--shadow-3); animation: ccyIn 140ms var(--ease-standard);
-}
-.skinmenu__title { padding: 6px 8px 6px; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--muted); }
-.skinmenu__opt {
-  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px;
-  border: none; border-radius: var(--r-sm); background: transparent; color: var(--muted-strong);
-  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); text-align: left; cursor: pointer;
-}
-.skinmenu__opt:hover { background: var(--panel-2); color: var(--ink); }
-.skinmenu__opt--on { color: var(--ink); font-weight: var(--fw-semibold); }
-.skinmenu__name { flex: 1; }
-.skinmenu__tick { flex: none; color: var(--accent); }
-.skinmenu__sw { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border-strong); }
-.skinmenu__sw--light { background: linear-gradient(135deg, #ffffff 50%, #00ff73 50%); }
-.skinmenu__sw--dark { background: linear-gradient(135deg, #000000 50%, #00ff73 50%); }
-.skinmenu__sw--enterprise { background: linear-gradient(135deg, #f4f5f6 50%, #0a6ed1 50%); }
-.skinmenu__sw--fis-light { background: linear-gradient(135deg, #ffffff 50%, #4bcd3e 50%); }
-.skinmenu__sw--fis-dark { background: linear-gradient(135deg, #1d1e4b 50%, #4bcd3e 50%); }
-:root[data-skin~='enterprise'] .skinmenu__title { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ink); }
-
-/* FIS v2 — matched to fisglobal.com: deep indigo chrome, FIS green pills,
-   light display type. Overrides the first-pass FIS tokens above. */
-:root[data-skin~='fis'] {
-  --fis-navy: #1d1e4b; --fis-indigo-2: #2a2c66; --fis-green: #4bcd3e; --fis-green-ink: #23801a;
-  --ink: #1d1e4b; --muted: #5e6080; --muted-strong: #33355e;
-  --bg: #f6f6fa; --panel-2: #f0f0f6; --border: #dcdce8; --border-strong: #c6c7d9; --grid: #ececf3;
-  --brand: #1d1e4b; --accent-ink: #1d1e4b;
-  --rail-bg: #1d1e4b; --rail-ink: #ffffff;
-  --font-sans: 'Manrope', 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
-}
-/* rail: the site's indigo top bar, white mark, green current-app badge */
-:root[data-skin~='fis'] .rail { background: var(--fis-navy); border-right-color: var(--fis-navy); }
-:root[data-skin~='fis'] .rail .rail__brand .rail__mark--dark { display: none; }
-:root[data-skin~='fis'] .rail .rail__brand .rail__mark--light { display: block; }
-:root[data-skin~='fis'] .rail .themebtn, :root[data-skin~='fis'] .railpulse { color: #c9cae6; }
-:root[data-skin~='fis'] .rail .themebtn:hover, :root[data-skin~='fis'] .skinmenu--open .themebtn { color: #fff; background: var(--fis-indigo-2); }
-:root[data-skin~='fis'] .railhelp { background: var(--fis-indigo-2); color: #fff; }
-:root[data-skin~='fis'] .railhelp:hover { background: #3a3d82; }
-:root[data-skin~='fis'] .railavatar { background: var(--fis-indigo-2); color: #fff; }
-/* display type: light, like the site's hero */
-:root[data-skin~='fis'] .app__header h1 { font-weight: 300; font-size: 28px; letter-spacing: -0.01em; }
-:root[data-skin~='fis'] .metric__value, :root[data-skin~='fis'] .balpanel__total-val { font-weight: 300; }
-/* controls: green pills, navy label */
-:root[data-skin~='fis'] .seg { border-radius: 999px; }
-:root[data-skin~='fis'] .seg__btn, :root[data-skin~='fis'] .seg__pill, :root[data-skin~='fis'] .seg__ghost { border-radius: 999px; }
-:root[data-skin~='fis'] .viewmenu__btn, :root[data-skin~='fis'] .expandbtn, :root[data-skin~='fis'] .app__controls .app__mult, :root[data-skin~='fis'] .ccypick__btn { border-radius: 999px; }
-:root[data-skin~='fis'] .vswitch--on .vswitch__knob { background: #fff; }
-/* the short green rule the site puts under section labels */
-:root[data-skin~='fis'] .viewtabs__ink { height: 3px; border-radius: 0; }
-
-/* FIS logo replaces the Uniun mark in the FIS skin */
-.rail__brand .rail__mark--fis { display: none; }
-:root[data-skin~='fis'] .rail .rail__brand img { display: none !important; }
-:root[data-skin~='fis'] .rail .rail__brand .rail__mark--fis { display: block !important; height: 52px; width: 52px; margin: -6px 0; }
-
-/* ---- Chart path toggle (balance panes) ---------------------------------- */
-.balpanel__total { position: relative; }
-.chartpathbtn {
-  position: absolute; top: 50%; right: 14px; transform: translateY(-50%);
-  display: inline-flex; align-items: center; gap: 6px; height: var(--chip-h); padding: 0 6px 0 10px;
-  border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--panel); color: var(--muted-strong);
-  font: inherit; font-size: var(--fs-small); font-weight: var(--fw-medium); letter-spacing: 0; cursor: pointer; white-space: nowrap;
-  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
-}
-.chartpathbtn:hover { color: var(--ink); border-color: var(--border-strong); }
-.chartpathbtn__state {
-  display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: var(--r-pill);
-  background: var(--panel-2); color: var(--muted); font-size: var(--fs-micro); font-weight: var(--fw-semibold);
-}
-.chartpathbtn--on { border-color: var(--accent-fill); color: var(--ink); }
-.chartpathbtn--on .chartpathbtn__state { background: var(--accent-fill); color: var(--accent-ink); }
-:root[data-skin~='enterprise']:not([data-skin~='fis']) .chartpathbtn { border-radius: var(--r-sm); }
-:root[data-skin~='enterprise']:not([data-skin~='fis']) .chartpathbtn--on .chartpathbtn__state { color: #fff; }
-@container balpanel (max-width: 360px) { .chartpathbtn { font-size: 0; gap: 4px; } .chartpathbtn svg { width: 14px; height: 14px; } }
-
-/* FIS chart: actuals in blue, the forecast in FIS green */
-:root[data-skin~='fis'] { --chart-actual: #2f6fd6; --chart-forecast: #4bcd3e; }
-
-/* Chart path sits on the total figure's line, not the band's centre */
-.chartpathbtn { top: calc(50% - 10px); }
-
-/* Company groups in the balance panes: each company is one contained block —
-   a tinted header band over its accounts, framed by a hairline. One 12px inset
-   runs all the way round: pane edge to box, header text, account rows. */
-.balpanel__body:has(> .balco--group) { padding: 12px; gap: 10px; }
-.balco--group {
-  flex: none; border: 1px solid var(--border); border-radius: var(--r-md);
-  background: var(--panel); overflow: hidden;
-}
-.balco--group > .balco__head {
-  width: 100%; margin: 0; padding: 10px 12px; border: none; border-bottom: 1px solid var(--border);
-  background: var(--panel-2); font-family: inherit; text-align: left; cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-standard), border-color 0s linear 0s;
-}
-.balco--group > .balco__head:hover { background: color-mix(in srgb, var(--ink) 5%, var(--panel-2)); }
-.balco--group > .balco__head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.balco--group .balco__name, .balco--group .balco__amt { color: var(--ink); }
-.balco--group .balco__dot { width: 8px; height: 8px; }
-.balco__chev { flex: none; color: var(--muted); margin-left: -2px; transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1); }
-.balco--folded .balco__chev { transform: rotate(-90deg); }
-.balco__count {
-  display: none; height: 16px; padding: 0 6px; border-radius: var(--r-pill); background: var(--panel);
-  border: 1px solid var(--border); font-size: 10px; line-height: 14px; letter-spacing: 0; color: var(--muted);
-}
-.balco--folded .balco__count { display: inline-block; }
-/* the fold: rows collapse by grid track, so any number of accounts animates */
-.balco__rows { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(0.32, 0.72, 0, 1); }
-.balco__rowsin { min-height: 0; overflow: hidden; transition: opacity 200ms var(--ease-standard); }
-.balco--folded .balco__rows { grid-template-rows: 0fr; }
-.balco--folded .balco__rowsin { opacity: 0; }
-.balco--folded > .balco__head { border-bottom-color: transparent; transition: background var(--dur-fast) var(--ease-standard), border-color 0s linear 280ms; }
-/* rows inside a box: same 12px side inset as the header; the box frame ends the last one */
-.balco--group .balacct__body { padding-left: 12px; padding-right: 12px; }
-.balco--group .balacct:last-child { border-bottom: none; }
-.balco--group .balacct + .balacct { border-top: none; }
-@media (prefers-reduced-motion: reduce) { .balco__rows, .balco__rowsin, .balco__chev { transition: none; } }
-:root[data-skin~='enterprise'] .balco--group { border-radius: var(--r-sm); }
-:root[data-skin~='enterprise'] .balco--group > .balco__head { text-transform: none; letter-spacing: 0; font-size: 12px; }
-
-
-/* company header: fold toggle + Open grid + total; hover drives the chart path */
-.balco--group > .balco__head { cursor: default; gap: 8px; }
-.balco__toggle {
-  display: inline-flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
-  margin: -4px 0; padding: 4px 0; border: none; background: transparent; color: inherit;
-  font: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left; cursor: pointer;
-}
-.balco__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
-.balco__toggle .balco__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.balco__head .balco__amt { margin-left: 0; flex: none; }
-.balco__open { flex: none; margin-left: 0; }
-.balco__head:hover .balco__open, .balco--hover .balco__open, .balco__open:focus-visible { opacity: 1; transform: none; pointer-events: auto; }
-.balco--hover > .balco__head { background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); }
-:root[data-skin~='enterprise'] .balco--hover > .balco__head { background: color-mix(in srgb, var(--brand) 8%, var(--panel-2)); }
-
-/* account sparklines (replace the share bars) */
-.balspark { flex: none; align-self: center; overflow: visible; opacity: 0.85; transition: opacity var(--dur-fast) var(--ease-standard); }
-.balacct:hover .balspark, .balacct--hover .balspark, .balacct--on .balspark { opacity: 1; }
-.balspark__line { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
-.balspark__zero { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 2 2; }
-.balspark__dot { stroke: var(--panel); stroke-width: 1; }
-@container balpanel (max-width: 340px) { .balspark { display: none; } }
-
-/* One row height for every body row of the grid — items, sections, movement,
-   balances and the sticky foot alike. The cell height is the row; vertical
-   padding is dropped so content can't push a row taller. Folded rows stay 0. */
-.catcap { padding-top: 0; padding-bottom: 0; }
-.grid tbody > tr:not(.grid__row--hidden):not(.grouptray__row) > td {
-  height: 32px; padding-top: 0 !important; padding-bottom: 0 !important;
-}
-:root[data-skin~='enterprise'] .grid tbody > tr:not(.grid__row--hidden):not(.grouptray__row) > td { height: 28px; }
-
-/* sparklines: quiet grey at rest; the account's colour only comes up on focus */
-.balspark { opacity: 1; }
-.balspark__line { stroke: var(--muted) !important; stroke-opacity: 0.55; stroke-width: 1.2; transition: stroke-opacity var(--dur-fast) var(--ease-standard); }
-.balspark__dot { fill: var(--muted) !important; fill-opacity: 0.7; }
-.balacct:hover .balspark__line, .balacct--hover .balspark__line, .balacct--on .balspark__line { stroke: var(--muted-strong) !important; stroke-opacity: 0.9; }
-.balacct:hover .balspark__dot, .balacct--hover .balspark__dot, .balacct--on .balspark__dot { fill: var(--muted-strong) !important; fill-opacity: 1; }
-.balspark--neg .balspark__line { stroke: color-mix(in srgb, var(--neg) 55%, var(--muted)) !important; }
-.balspark__zero { stroke: var(--border); }
-
-/* sparklines line up in one column: the figures take a fixed-width slot, so
-   every sparkline starts at the same x regardless of the amount beside it */
-.balacct__figs { flex: none; width: 92px; align-items: flex-end; }
-.balspark { margin-left: auto; }
-.balacct__main { flex: 1 1 auto; }
-@container balpanel (max-width: 380px) { .balacct__figs { width: 84px; } }
-.balacct__body { gap: 8px; }
-.balspark { margin-right: -2px; }
-
-/* sweep badge on zero-balancing pool accounts — the Sweep row's cyan */
-.balsweep {
-  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px;
-  border-radius: var(--r-pill); background: color-mix(in srgb, var(--outlier) 12%, var(--panel));
-  color: var(--outlier-ink); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: 0; line-height: 1; white-space: nowrap;
-}
-.balsweep--header { background: color-mix(in srgb, var(--outlier) 20%, var(--panel)); }
-:root[data-skin~='enterprise'] .balsweep { border-radius: var(--r-sm); }
-
-/* account number badge beside the name in the balance panes, always shown */
-.balacct__name .gbadge { flex: none; }
-
-/* sweep marker: icon-only circle; the styled tip names it */
-.balsweep { width: 18px; padding: 0; gap: 0; justify-content: center; border-radius: 50%; }
-.balsweep--header { color: var(--panel); background: var(--outlier-ink); }
-.balsweep[data-tip]::after { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); font-size: var(--fs-micro); padding: 5px 8px; }
-.balsweep[data-tip]::before { top: auto; bottom: calc(100% + 3px); left: 50%; margin-left: -5px; border-bottom-color: transparent; border-top-color: color-mix(in srgb, var(--ink) 92%, var(--panel)); }
-:root[data-skin~='enterprise'] .balsweep { border-radius: 50%; }
-
-/* name row: the name ellipsises first; badges never clip; Open grid takes no room until shown */
-.balacct__name { overflow: visible; min-width: 0; max-width: 100%; }
-.balacct__nametext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.balacct__name .gbadge, .balacct__name .balsweep { flex: none; }
-.balacct__name .balacct__open { max-width: 0; padding: 0; margin-left: 0; border-width: 0; overflow: hidden;
-  transition: opacity var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard), max-width 200ms var(--ease-standard), padding 200ms var(--ease-standard); }
-.balacct:hover .balacct__name .balacct__open, .balacct__name .balacct__open:focus-visible { max-width: 120px; padding: 0 8px; margin-left: 4px; border-width: 1px; }
-
-/* Folding Inflow / Outflow and group rows: the fixed row height has to animate
-   down to 0 with the content, or rows snap open/shut and leave the content's
-   own fold playing inside an already-sized row. */
-.grid tbody > tr.grid__row--item > td {
-  transition: height var(--dur-base) var(--ease-standard), padding var(--dur-base) var(--ease-standard),
-    line-height var(--dur-base) var(--ease-standard), border-bottom-width var(--dur-base) var(--ease-standard);
-}
-.grid tbody > tr.grid__row--hidden > td { height: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; border-top-width: 0 !important; border-bottom-width: 0 !important; overflow: hidden; }
-.grid tbody > tr.grid__row--hidden > td > * { max-height: 0 !important; }
-@media (prefers-reduced-motion: reduce) { .grid tbody > tr.grid__row--item > td { transition: none; } }
-
-/* KPIs showing one account / company (chart path) */
-.metrics--path .metric__value { transition: color var(--dur-fast) var(--ease-standard); }
-
-/* with every section folded the table is short — no floor, so the foot sits right under Outflow */
-.tablewrap { min-height: 0; }
-
-/* section rows draw only their bottom rule; the row above already supplies the top one,
-   so two adjacent sections (e.g. both folded) never stack a 2px line */
-.grid tbody > tr.grid__section > td { border-top-width: 0 !important; }
-.grid tbody > tr.grid__row--hidden { line-height: 0; font-size: 0; }
-.grid tbody > tr.grid__row--hidden > td { box-shadow: none !important; }
-
-/* Balance rows bookend the flows: a thin rule on their outer side, a heavier
-   2px rule on the side facing the items — under Opening, over Closing. */
-:root .grid .grid__row--opening > td { box-shadow: inset 0 -2px 0 var(--bal-rule) !important; }
-:root .grid .grid__row--opening > .grid__rowhead { box-shadow: inset 0 -2px 0 var(--bal-rule), inset -1px 0 0 var(--border) !important; }
-:root .grid .grid__row--closing > td { box-shadow: inset 0 2px 0 var(--bal-rule) !important; }
-:root .grid .grid__row--closing > .grid__rowhead { box-shadow: inset 0 2px 0 var(--bal-rule), inset -1px 0 0 var(--border) !important; }
-:root { --bal-rule: var(--brand); }
-:root[data-skin~='enterprise'] { --bal-rule: var(--border-strong); }
-:root[data-skin~='fis'] { --bal-rule: var(--fis-green); }
-.grid .grid__row--opening > td { border-bottom-color: transparent !important; }
-
-/* balance rows: a little taller, and offset by the 2px rule so their figures sit
-   centred in the space that's left */
-:root .grid tbody > tr.grid__row--opening:not(.grid__row--hidden):not(.grouptray__row) > td { height: 36px; padding-bottom: 2px !important; }
-:root .grid tbody > tr.grid__row--closing:not(.grid__row--hidden):not(.grouptray__row) > td { height: 36px; padding-top: 2px !important; }
-:root[data-skin~='enterprise'] .grid tbody > tr.grid__row--opening:not(.grid__row--hidden):not(.grouptray__row) > td,
-:root[data-skin~='enterprise'] .grid tbody > tr.grid__row--closing:not(.grid__row--hidden):not(.grouptray__row) > td { height: 32px; }
-
-/* balance handle: a pill inset inside its cell, clear of the 2px rule */
-.grid .balcell { height: 24px; margin: 0; padding: 0 6px; border-radius: var(--r-sm); line-height: 24px; vertical-align: middle; }
-:root[data-skin~='enterprise'] .grid .balcell { height: 22px; line-height: 22px; }
-.grid__cell--balcell { vertical-align: middle; }
-
-/* One grid geometry for every skin: 32px rows, 36px balance rows, 24px balance
-   handle, 1px rules with a 2px rule facing the flows. Skins differ in colour and
-   type only. (Overrides the denser Enterprise / FIS heights above.) */
-:root[data-skin~='enterprise'] .grid tbody > tr:not(.grid__row--hidden):not(.grouptray__row) > td { height: 32px; }
-:root[data-skin~='enterprise'] .grid tbody > tr.grid__row--opening:not(.grid__row--hidden):not(.grouptray__row) > td,
-:root[data-skin~='enterprise'] .grid tbody > tr.grid__row--closing:not(.grid__row--hidden):not(.grouptray__row) > td { height: 36px; }
-:root[data-skin~='enterprise'] .grid .balcell { height: 24px; line-height: 24px; }
-:root .grid tbody > tr:not(.grid__row--hidden):not(.grouptray__row) > td { border-top-width: 0; border-bottom-width: 1px; }
-:root .grid tbody > tr.grid__row--opening > td { border-bottom-width: 0 !important; }
-:root .grid tbody > tr.grid__row--bal > td { border-bottom-width: 0; }
-
-/* ============================================================
-   FIS - Dark: the site's deep indigo as the page, FIS green as the
-   accent. Layered over FIS (which itself sits on Enterprise), so every
-   light literal those skins hard-code is re-pointed here.
-   ============================================================ */
-:root[data-skin~='fis'][data-theme='dark'] {
-  --bg: #10112e; --panel: #16173d; --panel-2: #1e2050; --ink: #f1f2fa; --muted: #9b9dc6; --muted-strong: #cfd0ea;
-  --border: #2b2d62; --border-strong: #3b3e7c; --grid: #222458;
-  --rail-bg: #0c0d26; --rail-ink: #ffffff;
-  --brand: #4bcd3e; --accent: #6fdc63; --accent-fill: #4bcd3e; --accent-ink: #0c0d26;
-  --fis-navy: #0c0d26; --fis-green-ink: #6fdc63; --fis-tint: #1d3a3a; --fis-tint-2: #23463f;
-  --pos: #6fdc63; --neg: #ff6b6b;
-  --chart-actual: #6f9cf5; --chart-forecast: #4bcd3e;
-  --outlier-ink: #22d3ee;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5); --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5); --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.6);
-  --scroll-thumb: #34376e; --scroll-thumb-hover: #4a4e94;
-  color-scheme: dark;
-}
-:root[data-skin~='fis'][data-theme='dark'] .rail { background: var(--rail-bg); border-right-color: var(--border); }
-:root[data-skin~='fis'][data-theme='dark'] .railhelp, :root[data-skin~='fis'][data-theme='dark'] .railavatar { background: #23255a; }
-:root[data-skin~='fis'][data-theme='dark'] .rail .themebtn:hover, :root[data-skin~='fis'][data-theme='dark'] .skinmenu--open .themebtn { background: #23255a; }
-/* on dark, navy text on green stays; navy-filled controls flip to light */
-:root[data-skin~='fis'][data-theme='dark'] .seg__btn--on, :root[data-skin~='fis'][data-theme='dark'] :is(.groupbtn__btn--on, .titlenav--on) { background: var(--fis-green); color: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .vswitch--on .vswitch__knob { background: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .entpick__btn { color: var(--ink); }
-:root[data-skin~='fis'][data-theme='dark'] .grid__row--item .cell--agg { color: var(--ink); }
-:root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--ready { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--border-strong); }
-:root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--ready:hover, :root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--busy { background: var(--fis-green); color: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .balacct__open:hover { color: #0c0d26; background: var(--fis-green); border-color: var(--fis-green); }
-/* Enterprise's light wells and zebra, re-pointed to the dark palette */
-:root[data-skin~='fis'][data-theme='dark'] .grid__row--bal .grid__rowhead, :root[data-skin~='fis'][data-theme='dark'] .grid__row--bal .grid__cell, :root[data-skin~='fis'][data-theme='dark'] .grid__row--bal > .grid__rowhead { background: var(--panel-2); background-color: var(--panel-2); }
-:root[data-skin~='fis'][data-theme='dark'] .grid__rowhead:not([style*='background']) { background-color: var(--panel); }
-:root[data-skin~='fis'][data-theme='dark'] .grid__section > .grid__rowhead, :root[data-skin~='fis'][data-theme='dark'] .grid__row--move > .grid__rowhead { background-color: color-mix(in srgb, var(--ink) 4%, var(--panel)); }
-:root[data-skin~='fis'][data-theme='dark'] .grid__row--item:has(.grid__rowhead--pick:hover) > .grid__rowhead { background: color-mix(in srgb, var(--fis-green) 10%, var(--panel)); }
-:root[data-skin~='fis'][data-theme='dark'] .gnavwrap, :root[data-skin~='fis'][data-theme='dark'] .gband__route, :root[data-skin~='fis'][data-theme='dark'] .gcol--on, :root[data-skin~='fis'][data-theme='dark'] .gcol:not(.gcol--idle):hover, :root[data-skin~='fis'][data-theme='dark'] .gcol__more { background: var(--panel); }
-:root[data-skin~='fis'][data-theme='dark'] .gband, :root[data-skin~='fis'][data-theme='dark'] .gcol, :root[data-skin~='fis'][data-theme='dark'] .grouptray__row > td.grouptray__cell { background: var(--bg); }
-:root[data-skin~='fis'][data-theme='dark'] .gbadge { background: var(--panel-2); }
-:root[data-skin~='fis'][data-theme='dark'] .app__controls .seg, :root[data-skin~='fis'][data-theme='dark'] .app__controls .viewmenu__btn, :root[data-skin~='fis'][data-theme='dark'] .app__controls .app__mult, :root[data-skin~='fis'][data-theme='dark'] .app__header .app__ccy,
-:root[data-skin~='fis'][data-theme='dark'] .app__header .ccypick__btn:hover, :root[data-skin~='fis'][data-theme='dark'] .app__header .ccypick--open .ccypick__btn { background: var(--panel-2); border-color: var(--border-strong); }
-:root[data-skin~='fis'][data-theme='dark'] .skinmenu__sw { border-color: var(--border-strong); }
-:root[data-skin~='fis'][data-theme='dark'] ::selection { background: var(--fis-green); color: #0c0d26; }
-
-/* FIS - Dark: brand is the FIS green, so anything filled with it takes dark ink */
-:root[data-skin~='fis'][data-theme='dark'] .metric__find--on, :root[data-skin~='fis'][data-theme='dark'] .metric__find--on:hover { color: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .gchip--home, :root[data-skin~='fis'][data-theme='dark'] .gchip--home:hover { color: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .gload--band.gload--busy { color: #0c0d26; }
-:root[data-skin~='fis'][data-theme='dark'] .tab--summary.tab--on { color: var(--ink); }
-
-/* balance rules: neutral grey in every skin */
-:root, :root[data-skin~='enterprise'], :root[data-skin~='fis'] { --bal-rule: var(--border-strong); }
-
-/* Balance rules: same 1px weight as every grid line, told apart by a dash.
-   Opening's sits below it, Closing's above it (the row before drops its own). */
-:root .grid .grid__row--opening > td, :root .grid .grid__row--closing > td { box-shadow: none !important; }
-:root .grid .grid__row--opening > .grid__rowhead, :root .grid .grid__row--closing > .grid__rowhead { box-shadow: inset -1px 0 0 var(--border) !important; }
-:root .grid tbody > tr.grid__row--opening:not(.grid__row--hidden):not(.grouptray__row) > td {
-  padding-bottom: 0 !important; border-bottom: 1px dashed var(--border-strong) !important;
-}
-:root .grid tbody > tr.grid__row--closing:not(.grid__row--hidden):not(.grouptray__row) > td {
-  padding-top: 0 !important; border-top: 1px dashed var(--border-strong) !important;
-}
-:root .grid tbody > tr:has(+ tr.grid__row--closing) > td { border-bottom: none !important; }
-/* collapsed borders: a solid neighbour beats a dashed one, so the cell above Closing gives its edge up entirely */
-:root .grid tbody > tr.grid__row--closing > td { border-top-style: dashed !important; border-top-width: 1px !important; }
-
-/* Open grid: one slot at the far right of every row (account and company). It
-   folds open on hover and pushes the sparkline and amount left, rather than
-   squeezing in beside the name. */
-.balopen, .balacct__name .balacct__open.balopen, .balco__head .balopen {
-  order: 99; flex: none; align-self: center;
-  display: inline-flex; align-items: center; gap: 5px; height: 24px;
-  max-width: 0; padding: 0; margin-left: -8px; border-width: 0; overflow: hidden;
-  opacity: 0; transform: translateX(6px); pointer-events: none; white-space: nowrap;
-  border-radius: var(--r-pill); border-style: solid; border-color: var(--border-strong);
-  transition: max-width 240ms cubic-bezier(0.32, 0.72, 0, 1), padding 240ms cubic-bezier(0.32, 0.72, 0, 1),
-    margin-left 240ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard), transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
-    color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
-}
-.balacct:hover .balopen, .balco__head:hover .balopen, .balopen:focus-visible {
-  max-width: 110px; padding: 0 10px 0 8px; margin-left: 0; border-width: 1px;
-  opacity: 1; transform: none; pointer-events: auto;
-}
-.balacct__body { align-items: center; }
-:root[data-skin~='enterprise'] .balopen { border-radius: var(--r-sm); }
-@media (prefers-reduced-motion: reduce) { .balopen { transition: opacity 120ms; } }
-
-/* on hover the sparkline hands its slot to Open grid, so the name keeps its room */
-.balspark { max-width: 72px; transition: max-width 240ms cubic-bezier(0.32, 0.72, 0, 1), opacity 160ms var(--ease-standard), margin 240ms cubic-bezier(0.32, 0.72, 0, 1); }
-.balacct:hover:not(.balacct--on):not(.balacct--inert) .balspark { max-width: 0; opacity: 0; margin-left: -8px; }
-.balacct__main { min-width: 120px; }
-
-/* Chart path: hovering previews the account, so no Open grid — and the sparkline stays */
-.balpanel--path .balopen { display: none !important; }
-.balpanel--path .balacct:hover .balspark { max-width: 72px !important; opacity: 1 !important; margin-left: 0 !important; }
-
-/* Chart path: rows hold their collapsed shape on hover — no fold-open, no weight change */
-.balpanel--path .balacct .balacct__body { padding: 7px 8px !important; }
-.balpanel--path .balco--group .balacct .balacct__body { padding: 7px 12px !important; }
-.balpanel--path .balacct :is(.balacct__meta, .balacct__sub) { max-height: 0 !important; opacity: 0 !important; margin-top: 0 !important; transform: translateY(-3px) !important; }
-.balpanel--path .balacct .balacct__name { font-weight: var(--fw-medium) !important; }
-.balpanel--path .balacct .balacct__amt { font-weight: var(--fw-medium) !important; }
-.balpanel--path .balacct--hover .balacct__amt { color: var(--ink); }
-
-/* sparklines belong to Chart path: shown only while it's on */
-.balpanel:not(.balpanel--path) .balspark { display: none !important; }
-/* one row inset in every mode and state: 12px sides; only the vertical padding
-   opens on hover (Chart path off) */
-.balpanel .balacct .balacct__body { padding-left: 12px !important; padding-right: 12px !important; }
-.balpanel .balacct .balacct__body { padding-top: 7px; padding-bottom: 7px; }
-.balpanel:not(.balpanel--path) :is(.balacct:hover, .balacct--hover, .balacct--on) .balacct__body { padding-top: 10px; padding-bottom: 10px; }
-.balpanel--path .balacct .balacct__body, .balpanel--path .balco--group .balacct .balacct__body { padding: 7px 12px !important; }
-.balpanel__body:not(:has(> .balco--group)) { padding-left: 0; padding-right: 0; }
-
-/* hidden Open grid must not hold rows open: no height until it's shown */
-.balopen, .balacct__name .balacct__open.balopen, .balco__head .balopen { height: 0; }
-.balacct:hover .balopen, .balco__head:hover .balopen, .balopen:focus-visible { height: 24px; }
-
-/* Open grid opens leftwards out of the amount: it sits just before the figures,
-   which stay pinned at the right edge, so only the name side gives way */
-.balacct__body > .balacct__figs { order: 100; }
-.balco__head > .balco__amt { order: 100; }
-.balopen, .balacct__name .balacct__open.balopen, .balco__head .balopen { margin-left: 0; margin-right: -8px; transform: translateX(10px); }
-.balacct:hover .balopen, .balco__head:hover .balopen, .balopen:focus-visible { margin-right: 0; transform: none; }
-.balco__head:hover .balopen, .balco__head .balopen:focus-visible { height: 24px; margin-top: -2px; margin-bottom: -2px; }
-
-/* company total takes the same fixed slot as the account figures, so Open grid
-   lands in one column on header and account rows alike */
-.balco__head > .balco__amt { width: 92px; flex: none; text-align: right; }
-@container balpanel (max-width: 380px) { .balco__head > .balco__amt { width: 84px; } }
-
-/* Balance panes: no hover unfolding. Compact shows name + amount; detail adds the
-   bank / ccy / pool line and the share / movement line, always on. */
-.balpanel .balacct .balacct__body { padding-top: 8px !important; padding-bottom: 8px !important; transition: none; }
-.balpanel .balacct .balacct__name, .balpanel .balacct .balacct__amt { font-weight: var(--fw-medium) !important; transition: none; }
-.balpanel .balacct--hover .balacct__amt, .balpanel .balacct:hover .balacct__amt { color: var(--ink); }
-.balpanel .balacct :is(.balacct__meta, .balacct__sub) { transition: none !important; transform: none !important; }
-.balpanel--compact .balacct :is(.balacct__meta, .balacct__sub) { display: none !important; }
-.balpanel--detail .balacct :is(.balacct__meta, .balacct__sub) { display: flex !important; max-height: none !important; opacity: 1 !important; margin-top: 3px !important; }
-.balpanel--detail .balacct__sub { display: block !important; }
-.balpanel .balacct__no { opacity: 1; }
-.balpanel__foot { display: flex; align-items: center; justify-content: flex-end; padding: 10px 12px; }
-.balpanel__compact { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-small); color: var(--muted-strong); cursor: pointer; }
-
-/* Hover is paint-only: the Open grid pill floats inside the row's existing line
-   box, and every row reserves that height up front, so nothing reflows. */
-.balacct__body, .balco--group > .balco__head { min-height: 0; }
-.balacct__main { min-height: 20px; justify-content: center; }
-.balopen, .balacct:hover .balopen, .balco__head:hover .balopen, .balopen:focus-visible { margin-top: -2px !important; margin-bottom: -2px !important; height: 24px !important; }
-.balacct:not(:hover) .balopen:not(:focus-visible), .balco__head:not(:hover) .balopen:not(:focus-visible) { height: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important; }
-.balpanel .balacct .balacct__body, .balpanel .balco--group > .balco__head { transition: background var(--dur-fast) var(--ease-standard) !important; }
-.balacct, .balacct--hover, .balacct:hover { border-width: 0 0 1px; }
-.balco--group .balacct:last-child, .balco--group .balacct:last-child:hover { border-bottom-width: 0; }
-
-/* the app rail sits above everything — drawers slide out beneath it, never over it */
-.rail { z-index: 1000; isolation: isolate; background: var(--rail-bg); }
