@@ -417,15 +417,15 @@ export default function ForecastTable({
 // A balance figure that doubles as the way into its account breakdown. The two
 // ends of the horizon carry one each: the opening is actual, the closing forecast
 // — the panel draws that distinction, this is just the handle.
-// Below this column width a full figure leaves no room for the chevron, and it
-// would spill into the neighbouring cell — the hover tint and title carry it.
+// Below this column width the cell tightens (smaller chevron, no gap) so the
+// handle stays visible in Days and Months too.
 const BALCELL_CHEV_MIN_W = 84
 function BalanceCell({ value, num0, compact, mode, active, onOpen }) {
   const closing = mode === 'closing'
   const noun = closing ? 'closing' : 'opening'
   return (
     <button
-      className="cell cell--strong balcell"
+      className={`cell cell--strong balcell ${compact ? 'balcell--compact' : ''}`}
       onClick={() => onOpen(mode)}
       aria-expanded={active}
       title={active
@@ -435,7 +435,7 @@ function BalanceCell({ value, num0, compact, mode, active, onOpen }) {
           : 'Show the actual account balances this opens on'}
     >
       <span className={value < 0 ? 'is-neg' : undefined}>{num0(value)}</span>
-      {!compact && <svg className="balcell__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {<svg className="balcell__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M6 3.5 10.5 8 6 12.5" />
       </svg>}
     </button>

@@ -467,8 +467,8 @@ export default function AlignedChart({ skipDays = null, morphShift = 0, morphKey
       >
         <defs>
           <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" style={{ stopColor: prominent?.color, stopOpacity: 0.28 }} />
-            <stop offset="100%" style={{ stopColor: prominent?.color, stopOpacity: 0.02 }} />
+            <stop offset="0%" style={{ stopColor: `var(--chart-forecast, ${prominent?.color})`, stopOpacity: 0.28 }} />
+            <stop offset="100%" style={{ stopColor: `var(--chart-forecast, ${prominent?.color})`, stopOpacity: 0.02 }} />
           </linearGradient>
           {stackPaths &&
             stackPaths.map((b, i) =>
@@ -486,8 +486,8 @@ export default function AlignedChart({ skipDays = null, morphShift = 0, morphKey
               ) : null
             )}
           <linearGradient id="areaFillPast" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" style={{ stopColor: 'var(--muted)', stopOpacity: 0.22 }} />
-            <stop offset="100%" style={{ stopColor: 'var(--muted)', stopOpacity: 0.02 }} />
+            <stop offset="0%" style={{ stopColor: 'var(--chart-actual, var(--muted))', stopOpacity: 0.22 }} />
+            <stop offset="100%" style={{ stopColor: 'var(--chart-actual, var(--muted))', stopOpacity: 0.02 }} />
           </linearGradient>
           {todayX != null && (
             <>
@@ -605,7 +605,7 @@ export default function AlignedChart({ skipDays = null, morphShift = 0, morphKey
                 className="chart__line"
                 style={{
                   // actuals read as settled history in grey; the forecast carries the series colour, solid
-                  stroke: part === 'actual' && todayX != null ? 'var(--muted)' : ln.color,
+                  stroke: part === 'actual' && todayX != null ? 'var(--chart-actual, var(--muted))' : ln.prominent ? `var(--chart-forecast, ${ln.color})` : ln.color,
                   strokeWidth: ln.prominent ? 1.5 : ln.muted ? 1 : 1.25,
                   strokeOpacity: ln.muted ? 0.4 : 1,
                   strokeDasharray: ln.dash ? '6 4' : undefined,
