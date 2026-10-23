@@ -144,7 +144,7 @@ export default function BalancePanel({ open, mode = 'opening', side = 'left', or
                 </button>
                 <span className="balco__amt">{money0(c.total)}</span>
                 {onSelectEntity && activeTab !== c.id && (
-                  <button className="balacct__open balco__open balopen" onClick={() => onSelectEntity(c.id)} title={`Open the ${c.company} grid`}>
+                  <button className="balacct__open" onClick={() => onSelectEntity(c.id)} title={`Open the ${c.company} grid`}>
                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 6h12M6 6v7.5" />
                     </svg>
@@ -283,7 +283,7 @@ function AccountRow({ row, peak, total, closing, money0, currency, onSelect, cur
         </span>
         {/* shortcut into this account's own grid — leaves a breadcrumb back */}
         {canOpen && (
-          <button className="balacct__open balopen" onClick={() => onSelect(row.id)} title={`Open the ${row.name} grid`}>
+          <button className="balacct__open" onClick={() => onSelect(row.id)} title={`Open the ${row.name} grid`}>
             <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 6h12M6 6v7.5" />
             </svg>
