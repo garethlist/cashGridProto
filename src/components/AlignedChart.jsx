@@ -895,7 +895,7 @@ function HoverTip({ x, contentW, labelW, iso, lines, net, bucket, found = false,
         )
       })}
       <div className="chart__tip-row chart__tip-row--sub">
-        <span>Day net</span>
+        <span>Daily net</span>
         <strong className={net < 0 ? 'is-neg' : net > 0 ? 'is-pos' : ''}>
           {net > 0 ? '+' : ''}
           {gbp0(net)}
