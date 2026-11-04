@@ -5222,12 +5222,3 @@ html, * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparen
 .grid th.grid__colhead { padding-top: 5px; padding-bottom: 17px; }
 .grid th.grid__rowhead--corner { padding-top: 0; padding-bottom: 10px; }
 .grid th.grid__rowhead--corner > .rowhead__inner { position: relative; top: -6px; }
-
-/* --- Styling fixes from HubCore (Gridv2), exported from Hub.Client.React upstream/cash-grid.css --- */
-.seg--slide .seg__btn--on {
-  color: var(--panel);
-}
-
-:root[data-theme='dark'] .seg--slide .seg__btn--on {
-  color: var(--muted);
-}
