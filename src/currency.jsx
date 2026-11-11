@@ -1,15 +1,16 @@
 import { createContext, useContext, useMemo } from 'react'
 
-const CurrencyContext = createContext({ currency: 'GBP', locale: 'en-GB' })
+const CurrencyContext = createContext({ currency: 'GBP', locale: 'en-GB', multiplier: 'base' })
 
-export function CurrencyProvider({ currency, locale, children }) {
-  const value = useMemo(() => ({ currency, locale }), [currency, locale])
+// multiplier: 'base' (whole units) or 'k' (thousands, one decimal) — grid figures only
+export function CurrencyProvider({ currency, locale, multiplier = 'base', children }) {
+  const value = useMemo(() => ({ currency, locale, multiplier }), [currency, locale, multiplier])
   return <CurrencyContext.Provider value={value}>{children}</CurrencyContext.Provider>
 }
 
 // Formatters bound to the active tab's currency/locale.
 export function useMoney() {
-  const { currency, locale } = useContext(CurrencyContext)
+  const { currency, locale, multiplier } = useContext(CurrencyContext)
   return useMemo(() => {
     // A zero-balancing account nets to zero only to within float precision, so
     // snap anything under half a unit to a clean 0 — otherwise the residue shows
@@ -33,8 +34,13 @@ export function useMoney() {
       return `${symbol}${Math.round(v)}`
     }
     // plain grouped number (no currency symbol) — grid style; currency shown by the tab
-    const num0 = (v) => Math.round(Number(v) || 0).toLocaleString(locale)
+    const num0 = multiplier === 'k'
+      ? (v) => {
+          const n = Math.round((Number(v) || 0) / 100) / 10
+          return (n === 0 ? 0 : n).toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+        }
+      : (v) => Math.round(Number(v) || 0).toLocaleString(locale)
     const dashNum = (v) => (Number(v) === 0 ? '–' : num0(v))
-    return { money0, signed, compact, num0, dashNum, symbol, currency, locale }
-  }, [currency, locale])
+    return { money0, signed, compact, num0, dashNum, symbol, currency, locale, multiplier }
+  }, [currency, locale, multiplier])
 }

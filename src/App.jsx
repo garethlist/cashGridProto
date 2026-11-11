@@ -3,7 +3,7 @@ import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, co
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView, EUR_SWEEP,
-  CONTRIB_COLORS, accountBalances, fxConv, TODAY_ISO,
+  CONTRIB_COLORS, accountBalances, scopedDailySeries, fxConv, TODAY_ISO,
 } from './views.js'
 import AlignedChart from './components/AlignedChart.jsx'
 import ForecastTable from './components/ForecastTable.jsx'
@@ -18,6 +18,9 @@ import OutlierIcon from './components/OutlierIcon.jsx'
 import CategoryTag from './components/CategoryTag.jsx'
 import { CurrencyProvider, useMoney } from './currency.jsx'
 import { useGridNav, AcctBadge } from './components/GridNav.jsx'
+import brandMarkDark from './assets/brand-mark-dark.svg'
+import brandMarkLight from './assets/brand-mark-light.svg'
+import fisLogo from './assets/fis-logo.png'
 
 // Shared column geometry — the single source of alignment between chart & table.
 // Wide enough for the row name plus its badges/controls once the full-bleed
@@ -27,7 +30,7 @@ import { useGridNav, AcctBadge } from './components/GridNav.jsx'
 const LABEL_W_DEFAULT = 320
 const LABEL_W_MIN = 200
 const LABEL_W_MAX = 560
-const CHART_H = 330
+const CHART_H = 380
 
 // How many columns should fill the window by default, per granularity.
 const TARGET_COLS = { day: 14, week: 13, month: 12 }
@@ -45,19 +48,29 @@ const GRANULARITIES = [
 ]
 
 // Track the available width of an element (excludes scrollbar), live on resize.
+// side-panel slide length — the page's reserve animates in lockstep with it
+const PANEL_MS = 240
+
 function useMeasuredWidth() {
   const ref = useRef(null)
   const [width, setWidth] = useState(0)
+  // while a panel slides, the width is set once to its end value and the
+  // per-frame resize readings are ignored, so the chart + grid render once
+  const frozen = useRef(false)
+  const onMeasure = useRef(null)
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    const update = () => setWidth(el.clientWidth)
+    // first measure is urgent; later ones (panels docking, window resizes) are
+    // transitions, so the panel's slide starts at once and the big re-layout of
+    // chart + grid happens behind it without blocking input
+    const update = () => { if (!frozen.current) { onMeasure.current?.(); setWidth(el.clientWidth) } }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  return [ref, width]
+  return [ref, width, setWidth, frozen, onMeasure]
 }
 
 export default function App() {
@@ -129,10 +142,24 @@ export default function App() {
     } catch (e) { /* ignore */ }
     return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
-  // Skin: the Uniun look, or a light, dense "Enterprise" skin for ERP-style reviews. Persisted.
-  const [skin, setSkin] = useState(() => { try { return localStorage.getItem('cf-skin') === 'enterprise' ? 'enterprise' : 'uniun' } catch (e) { return 'uniun' } })
+  // Grid number multiplier: whole units or thousands. Persisted.
+  const [multiplier, setMultiplier] = useState(() => { try { return localStorage.getItem('cf-mult') === 'k' ? 'k' : 'base' } catch (e) { return 'base' } })
+  useEffect(() => { try { localStorage.setItem('cf-mult', multiplier) } catch (e) {} }, [multiplier])
+  // View toggles, persisted: weekends in the Days grid, and the chart above the grid.
+  const [showWeekends, setShowWeekends] = useState(() => { try { return localStorage.getItem('cf-weekends') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-weekends', showWeekends ? 'on' : 'off') } catch (e) {} }, [showWeekends])
+  // Grouping area: the space above the grouping column. 'context' keeps the chart's
+  // key there (title, y-axis, stack legend, notes) pinned while the dates scroll;
+  // 'chart' lets the plot run underneath it edge to edge.
+  const [groupArea, setGroupArea] = useState(() => { try { return localStorage.getItem('cf-area') === 'chart' ? 'chart' : 'context' } catch (e) { return 'context' } })
+  useEffect(() => { try { localStorage.setItem('cf-area', groupArea) } catch (e) {} }, [groupArea])
+  const [showChart, setShowChart] = useState(() => { try { return localStorage.getItem('cf-chart') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-chart', showChart ? 'on' : 'off') } catch (e) {} }, [showChart])
+  // Skin: Uniun, a dense "Enterprise" ERP skin, or "FIS" (Enterprise density in FIS navy + green). Persisted.
+  const [skin, setSkin] = useState(() => { try { const s = localStorage.getItem('cf-skin'); return s === 'enterprise' || s === 'fis' ? s : 'uniun' } catch (e) { return 'uniun' } })
   useLayoutEffect(() => {
     if (skin === 'enterprise') document.documentElement.setAttribute('data-skin', 'enterprise')
+    else if (skin === 'fis') document.documentElement.setAttribute('data-skin', 'enterprise fis')
     else document.documentElement.removeAttribute('data-skin')
     try { localStorage.setItem('cf-skin', skin) } catch (e) { /* ignore */ }
   }, [skin])
@@ -189,7 +216,7 @@ export default function App() {
   const groupTabRef = useRef(null)
   const entityTabRef = useRef(null)
   const [ink, setInk] = useState({ left: 0, width: 0 })
-  const [labelW, setLabelW] = useState(LABEL_W_DEFAULT) // category column width, set by the splitter
+  const [labelWPref, setLabelW] = useState(LABEL_W_DEFAULT) // category column width, set by the splitter
   const [dragging, setDragging] = useState(false)
 
   // Splitter: drag the chart/table divider to resize the category column.
@@ -197,7 +224,7 @@ export default function App() {
   // capture here makes the column jump to the wrong size on drag.
   const dragRef = useRef(null)
   const labelWRef = useRef(LABEL_W_DEFAULT)
-  useEffect(() => { labelWRef.current = labelW }, [labelW])
+  useEffect(() => { labelWRef.current = labelWPref }, [labelWPref])
   const onSplitterDown = useCallback((e) => {
     e.preventDefault()
     dragRef.current = { startX: e.clientX, startW: labelWRef.current }
@@ -231,7 +258,8 @@ export default function App() {
   const [underlying, setUnderlying] = useState(null) // { section, row, bucket, data } for the Base-mode detail panel
   // Which end of the horizon the left-hand balance panel is showing, if any:
   // 'opening' (actual, yesterday's closing ledger) or 'closing' (forecast).
-  const [balanceMode, setBalanceMode] = useState(null)
+  // Opening docks left, closing docks right — both can be open at once.
+  const [balOpen, setBalOpen] = useState({ opening: false, closing: false })
   // Where a drill-through from the balance panel started — { tabId, title } —
   // so the panel can offer the way back. Only set by that drill; any other route
   // to another grid clears it (see goToTab), since the trail no longer holds.
@@ -475,7 +503,26 @@ export default function App() {
   // impact. On GROUP this is the raw consolidation, so the impact reflects both
   // rolled-up entity shocks and group-level shocks.
   const baseDaily = useMemo(() => computeDaily(state), [state])
-  const buckets = useMemo(() => bucketize(state.days, granularity), [state.days, granularity])
+  // Hiding weekends (Days view only) folds Saturday and Sunday into the following
+  // Monday's column — the money still lands, and every total still reconciles.
+  // A trailing weekend folds back into the last weekday.
+  const buckets = useMemo(() => {
+    const raw = bucketize(state.days, granularity)
+    if (granularity !== 'day' || showWeekends) return raw
+    const dow = (iso) => new Date(iso + 'T00:00:00Z').getUTCDay()
+    const out = []
+    let pending = []
+    for (const b of raw) {
+      if (dow(b.startISO) % 6 === 0) { pending.push(...b.dayIndices); continue }
+      out.push({ ...b, index: out.length, dayIndices: [...pending, ...b.dayIndices], startISO: pending.length ? state.days[pending[0]] : b.startISO, folded: pending.length > 0 })
+      pending = []
+    }
+    if (pending.length && out.length) {
+      const last = out[out.length - 1]
+      out[out.length - 1] = { ...last, dayIndices: [...last.dayIndices, ...pending], endISO: state.days[pending[pending.length - 1]], folded: true }
+    }
+    return out
+  }, [state.days, granularity, showWeekends])
   // Rows beneath the fixed Inflow/Outflow sections, grouped by one level or a
   // drill-down chain. Only the table's aggregation swaps — the chart, KPIs and
   // balances are unaffected.
@@ -551,7 +598,8 @@ export default function App() {
     if (!row.values) return
     const dailyValues = bucket.dayIndices.map((i) => Number(row.values[i]) || 0)
     const data = cellUnderlying(row, bucket, dailyValues, state.days)
-    setOutlierDay(null) // the two drill-ins share the right-hand dock
+    setOutlierDay(null) // the drill-ins share the right-hand dock
+    setBalOpen((b) => (b.closing ? { ...b, closing: false } : b))
     // clicking the cell that's already open closes the panel again
     setUnderlying((cur) =>
       cur && cur.section === section && cur.row.id === row.id && cur.bucket.key === bucket.key
@@ -571,11 +619,53 @@ export default function App() {
   // the bank accounts the active grid draws on. The panel is left open across grid
   // changes — it re-reads for whichever grid you land on, which is what makes
   // clicking through to an account work.
-  const breakdown = useMemo(
-    () => accountBalances(shockedStates, view, displayCurrency, balanceMode ?? 'opening'),
-    [shockedStates, view, displayCurrency, balanceMode]
+  const openBreakdown = useMemo(
+    () => accountBalances(shockedStates, view, displayCurrency, 'opening'),
+    [shockedStates, view, displayCurrency]
   )
-  const closeBalance = useCallback(() => setBalanceMode(null), [])
+  const closeBreakdown = useMemo(
+    () => accountBalances(shockedStates, view, displayCurrency, 'closing'),
+    [shockedStates, view, displayCurrency]
+  )
+  // one account order for both panes — the opening balance's, largest first
+  const balOrder = useMemo(() => {
+    const o = {}
+    openBreakdown.slice().sort((a, b) => b.value - a.value).forEach((r, i) => { o[r.id] = i })
+    return o
+  }, [openBreakdown])
+  const [balHover, setBalHover] = useState(null)
+  // balance panes: compact = name + amount only; off = bank / ccy / pool and share lines too
+  const [balCompact, setBalCompact] = useState(() => { try { return localStorage.getItem('cf-balcompact') !== 'off' } catch (e) { return true } })
+  useEffect(() => { try { localStorage.setItem('cf-balcompact', balCompact ? 'on' : 'off') } catch (e) {} }, [balCompact])
+  // Each account's running balance over the horizon, thinned to ~80 points, for
+  // the sparklines in the balance panes. Only built while a pane is open.
+  const balSparks = useMemo(() => {
+    if (!balOpen.opening && !balOpen.closing) return null
+    const out = {}
+    for (const r of closeBreakdown) {
+      if (r.unassigned) continue
+      const s = scopedDailySeries(shockedStates, displayCurrency, r.entityId, [r.id])
+      if (!s) continue
+      const step = Math.max(1, Math.floor(s.length / 80))
+      const pts = []
+      for (let i = 0; i < s.length; i += step) pts.push(s[i])
+      if ((s.length - 1) % step) pts.push(s[s.length - 1])
+      out[r.id] = pts
+    }
+    return out
+  }, [balOpen.opening, balOpen.closing, closeBreakdown, shockedStates, displayCurrency])
+  const todayFrac = state.days.length > 1 ? Math.max(0, state.days.indexOf(TODAY_ISO)) / (state.days.length - 1) : 0
+  // Chart path: while on, hovering an account or company in either balance pane
+  // drives the chart, grid and KPIs from that target. Shared by both panes.
+  const [chartPath, setChartPath] = useState(false)
+  const toggleChartPath = useCallback(() => setChartPath((on) => !on), [])
+  // Context of the grid a panel drill started from, so closing the panels can put
+  // the user back exactly where they were: same grid, period window, page scroll
+  // and selected rows.
+  const restoreRef = useRef(null)
+  const ctxRef = useRef({ colW: 0, selection: [] })
+  useEffect(() => { if (!balOpen.opening && !balOpen.closing) setChartPath(false) }, [balOpen])
+  const closeBalanceOnly = useCallback((which) => setBalOpen((b) => (which ? { ...b, [which]: false } : { opening: false, closing: false })), [])
   // Every other route to another grid — the tab strip, the view picker, the
   // contributions legend, a shock's source link — abandons the drill-through, so
   // the breadcrumb goes with it.
@@ -586,35 +676,47 @@ export default function App() {
   // Drill from the panel into one account's own grid, remembering where we came
   // from. The first origin is kept, so "back" always returns to where the trail
   // started rather than one hop up it.
-  const drillToAccount = useCallback((acctId) => {
-    const id = acctTab(acctId)
+  const drillToAccount = useCallback((acctId, asTab) => {
+    const id = asTab ? acctId : acctTab(acctId)
     if (id === activeTab) return
-    setBalanceOrigin((cur) => cur ?? { tabId: activeTab, title: view.title })
+    setBalanceOrigin((cur) => cur ?? {
+      tabId: activeTab,
+      title: view.title,
+      bucket: ctxRef.current.colW > 0 && scrollRef.current ? Math.round(scrollRef.current.scrollLeft / ctxRef.current.colW) : null,
+      scrollY: window.scrollY,
+      selection: ctxRef.current.selection,
+    })
     setActiveTab(id)
   }, [activeTab, view.title])
   const backToOrigin = useCallback(() => {
-    if (balanceOrigin) setActiveTab(balanceOrigin.tabId)
+    if (balanceOrigin) {
+      restoreRef.current = { ...balanceOrigin }
+      setActiveTab(balanceOrigin.tabId)
+    }
     setBalanceOrigin(null)
   }, [balanceOrigin])
+  // Closing the balance panels after a drill-through returns to the grid it started on.
+  const closeBalance = useCallback((which) => {
+    closeBalanceOnly(which)
+    if (!which && balanceOrigin) backToOrigin()
+  }, [closeBalanceOnly, balanceOrigin, backToOrigin])
   useEffect(() => {
-    if (!balanceMode) return undefined
+    if (!balOpen.opening && !balOpen.closing) return undefined
     const onKey = (e) => e.key === 'Escape' && closeBalance()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [balanceMode, closeBalance])
+  }, [balOpen, closeBalance])
   // Open on one end of the horizon, and bring the cell it refers to into view —
   // the closing cell is at the far right of a year-long grid, so a highlight on
   // its own would land off-screen.
   const showBalance = useCallback((next) => {
-    setBalanceMode((cur) => (cur === next ? null : next))
+    let opening = false
+    setBalOpen((b) => { opening = !b[next]; return { ...b, [next]: !b[next] } })
+    // the closing panel takes the right-hand dock from the other drill-ins
+    if (next === 'closing') { setUnderlying(null); setOutlierDay(null) }
     const box = scrollRef.current
     if (!box) return
-    if (next === 'closing') { box.scrollTo({ left: box.scrollWidth, behavior: 'smooth' }); return }
-    // the opening balance is today's position — keep today's column in view, not 1 Jan
-    const cell = box.querySelector('.grid__row--bal .grid__cell--balcell')
-    const head = box.querySelector('.grid__row--bal .grid__rowhead')
-    const left = cell && head ? Math.max(0, cell.offsetLeft - head.offsetWidth) : box.scrollLeft
-    requestAnimationFrame(() => box.scrollTo({ left, behavior: 'smooth' }))
+    // opening: leave the grid where it is — the user's focus stays put
   }, [])
 
   // Model detail sheet, opened from the right-hand half of a category capsule.
@@ -853,6 +955,7 @@ export default function App() {
   // Both drill-ins dock to the same edge, so opening one dismisses the other.
   const openOutlier = useCallback((dayIndex) => {
     setUnderlying(null)
+    setBalOpen((b) => (b.closing ? { ...b, closing: false } : b))
     setOutlierDay((cur) => (cur === dayIndex ? null : dayIndex))
   }, [])
   const closeOutlier = useCallback(() => setOutlierDay(null), [])
@@ -1045,7 +1148,158 @@ export default function App() {
   // Size columns so the target count fills the measured width; scroll for more.
   // Widening the category column takes space from the data columns (and vice
   // versa), so dragging the splitter re-proportions every period column.
-  const [scrollRef, availW] = useMeasuredWidth()
+  const [scrollRef, measuredW, setMeasuredW, widthFrozen, onMeasure] = useMeasuredWidth()
+  const appRef = useRef(null)
+  // Docked side panels. The page reserve beside each animates with the panel
+  // (same curve, PANEL_MS), so the chart + grid edge travels with the panel edge.
+  // The end width is known up front — the reserve is the panel width — so the
+  // chart and grid render once at their final size in the same render as the
+  // click, and the sliding frame just reveals or covers that layout.
+  const wantRight = !!(underlying || activeOutlier || balOpen.closing)
+  const wantLeft = balOpen.opening
+  const dock = { left: wantLeft, right: wantRight }
+  const reserveFor = (l, r) => {
+    if (typeof window === 'undefined') return 0
+    const pw = Math.min(460, Math.floor((window.innerWidth - 72) * (l && r ? 0.36 : 0.5)))
+    return (l ? pw : 0) + (r ? pw : 0)
+  }
+  const targetReserve = reserveFor(wantLeft, wantRight)
+  const targetReserveRef = useRef(targetReserve)
+  targetReserveRef.current = targetReserve
+  const measuredReserveRef = useRef(targetReserve)
+  onMeasure.current = () => { measuredReserveRef.current = targetReserveRef.current }
+  const dockKey = `${wantLeft}|${wantRight}`
+  const lastDockKey = useRef(dockKey)
+  if (lastDockKey.current !== dockKey) { lastDockKey.current = dockKey; widthFrozen.current = true }
+  // Unfreeze when the reserve's padding transition actually finishes (not on a
+  // timer, which can fire early if the first frame is slow), then take one real
+  // measurement so the layout settles on the true width.
+  useEffect(() => {
+    const el = appRef.current
+    if (!el) return undefined
+    let fallback = 0
+    let raf = 0
+    // While the frame animates, its width changes every frame and the browser
+    // clamps / re-snaps scrollLeft as it does — pin the held period each frame.
+    const pin = () => {
+      const box = scrollRef.current
+      const b = firstBucket.current, cw = anchorColW.current
+      if (box && b != null && cw > 0 && Math.abs(box.scrollLeft - b * cw) > 0.5) box.scrollLeft = b * cw
+    }
+    const loop = () => { pin(); raf = requestAnimationFrame(loop) }
+    const settle = () => {
+      clearTimeout(fallback)
+      cancelAnimationFrame(raf); raf = 0
+      widthFrozen.current = false
+      const box = scrollRef.current
+      if (box) { measuredReserveRef.current = targetReserveRef.current; setMeasuredW(box.clientWidth) }
+      requestAnimationFrame(pin)
+    }
+    const isPad = (e) => e.target === el && e.propertyName.startsWith('padding')
+    const onRun = (e) => {
+      if (!isPad(e)) return
+      widthFrozen.current = true
+      clearTimeout(fallback); fallback = setTimeout(settle, PANEL_MS * 4)
+      if (!raf) loop()
+    }
+    const onEnd = (e) => {
+      if (!isPad(e)) return
+      // both sides can be animating; wait for the last one
+      requestAnimationFrame(() => { if (!el.getAnimations || !el.getAnimations().some((a) => a.transitionProperty?.startsWith('padding'))) settle() })
+    }
+    el.addEventListener('transitionrun', onRun)
+    el.addEventListener('transitionend', onEnd)
+    el.addEventListener('transitioncancel', onEnd)
+    return () => { clearTimeout(fallback); cancelAnimationFrame(raf); el.removeEventListener('transitionrun', onRun); el.removeEventListener('transitionend', onEnd); el.removeEventListener('transitioncancel', onEnd) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // no padding change (e.g. reduced motion, or the reserve didn't move): settle now
+    if (!widthFrozen.current) return undefined
+    const t = setTimeout(() => {
+      const el = appRef.current
+      const running = el?.getAnimations?.().some((a) => a.transitionProperty?.startsWith('padding'))
+      if (running) return
+      widthFrozen.current = false
+      const box = scrollRef.current
+      if (box) { measuredReserveRef.current = targetReserveRef.current; setMeasuredW(box.clientWidth) }
+    }, 60)
+    return () => clearTimeout(t)
+  }, [dockKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const availW = measuredW > 0 ? Math.max(0, measuredW + measuredReserveRef.current - targetReserve) : 0
+  // While a panel slides in, the frame is still at its old (wider) width but the
+  // content is already at its final (narrower) size, so the scroll range would be
+  // too short to hold the period in view and the browser would clamp it back
+  // towards actuals. Trailing slack equal to the not-yet-reserved width keeps the
+  // range; it drops to 0 once the reserve has landed and been measured.
+  const freezeSlack = Math.max(0, targetReserve - measuredReserveRef.current)
+  // The category column gives way when the grid is framed between panels, so the
+  // data columns are never squeezed out of view; it returns to its set width after.
+  const labelW = availW > 0 ? Math.min(labelWPref, Math.max(150, Math.round(availW * 0.36))) : labelWPref
+  const footRef = useRef(null)
+  const headRef = useRef(null)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const foot = footRef.current
+    if (!el || !foot) return undefined
+    const sync = () => {
+      foot.scrollLeft = el.scrollLeft
+      const clip = headRef.current?.firstElementChild
+      if (clip) clip.scrollLeft = el.scrollLeft
+    }
+    sync()
+    el.addEventListener('scroll', sync, { passive: true })
+    return () => el.removeEventListener('scroll', sync)
+  })
+  // Pinned date header: a zero-height sticky strip parked under the top bar. Its
+  // position is native sticky; it is only shown once the real header slides beneath it.
+  useLayoutEffect(() => {
+    const head = headRef.current
+    if (!head) return undefined
+    const update = () => {
+      const bar = document.querySelector('.gnavwrap')
+      const top = bar ? Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) : 0
+      head.style.top = top + 'px'
+      const real = scrollRef.current?.querySelector('table.grid:not(.grid--head):not(.grid--foot) > thead')
+      const on = !!real && real.getBoundingClientRect().top < top
+      head.classList.toggle('gridhead--on', on)
+    }
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    return () => { window.removeEventListener('scroll', update); window.removeEventListener('resize', update) }
+  })
+  // Side panels line their header and total band up with the page's top bar and
+  // title band, so the greys and rules run straight across. Measured at scroll 0.
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const measure = () => {
+      const bar = document.querySelector('.gnavwrap')
+      const kpis = document.querySelector('.metrics')
+      if (!bar || !kpis) return
+      const top = bar.offsetHeight
+      // +1: the KPI strip draws its rule inside its own top edge, the band draws its
+      // rule inside its bottom edge — so the band runs 1px further to overlay it exactly
+      const band = Math.max(56, Math.round(kpis.getBoundingClientRect().top + window.scrollY - top) + 1)
+      root.style.setProperty('--chrome-top', top + 'px')
+      root.style.setProperty('--chrome-band', band + 'px')
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    const bar = document.querySelector('.gnavwrap')
+    const head = document.querySelector('.app__header')
+    if (bar) ro.observe(bar)
+    if (head) ro.observe(head)
+    window.addEventListener('resize', measure)
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure) }
+  })
+  const openGroupFromHead = useCallback(() => {
+    const real = scrollRef.current?.querySelector('table.grid:not(.grid--head):not(.grid--foot) > thead')
+    if (!real) return
+    const bar = document.querySelector('.gnavwrap')
+    const top = bar ? bar.getBoundingClientRect().bottom : 0
+    window.scrollTo({ top: window.scrollY + real.getBoundingClientRect().top - top })
+    requestAnimationFrame(() => real.querySelector('.groupbtn__btn')?.click())
+  }, [scrollRef])
   // Re-settle the chart and grid whenever the period granularity changes.
   const alignedRef = useRef(null)
   // The table steps back under a loader while the chart morphs. Toggled straight
@@ -1058,8 +1312,19 @@ export default function App() {
     return () => clearTimeout(t)
   }, [granularity])
   const target = TARGET_COLS[granularity]
+  // Fit a whole number of columns to the visible width, so the last one always
+  // ends exactly at the frame edge (and so at a docked panel's edge). When the
+  // target count won't fit at the minimum width, show fewer, wider-than-minimum
+  // columns rather than a part-column cut off by the panel.
+  // The visible set of periods is decided at the undocked width and then held:
+  // docking a panel narrows the same columns rather than dropping any, so the
+  // dates on screen never move when a balance panel opens or closes.
+  const freeW = measuredW > 0 ? measuredW + measuredReserveRef.current : 0
+  const freeLabelW = freeW > 0 ? Math.min(labelWPref, Math.max(150, Math.round(freeW * 0.36))) : labelWPref
+  const fitCols = freeW > 0 ? Math.max(1, Math.min(target, Math.floor((freeW - freeLabelW) / MIN_COL_W[granularity]))) : target
+  const docked = targetReserve > 0
   const colW = availW > 0
-    ? Math.max(MIN_COL_W[granularity], Math.floor((availW - labelW) / target))
+    ? Math.max(docked ? 28 : MIN_COL_W[granularity], Math.floor((availW - labelW) / fitCols))
     : MIN_COL_W[granularity]
   const contentW = labelW + buckets.length * colW
   // Columns are floored to whole pixels, so a sliver of width is left over at the right. It's
@@ -1073,6 +1338,11 @@ export default function App() {
   // Re-anchor on today whenever the timeframe or grid changes. Applied once the new
   // columns have laid out (the morph and the deferred re-render both land late).
   const anchoredFor = useRef('')
+  const anchorColW = useRef(0)
+  // The first period in view, tracked from deliberate moves only (period buttons,
+  // wheel/trackpad, re-anchors) — never read back from scrollLeft after a resize,
+  // which the browser clamps and re-snaps as the content narrows.
+  const firstBucket = useRef(null)
   // The column splitter only spans the grid, so it never sits over the chart and
   // swallow its hover — the Today line lands right on that divider.
   const [splitTop, setSplitTop] = useState(0)
@@ -1088,11 +1358,30 @@ export default function App() {
     if (!el || todayBucket < 0 || !(colW > 0)) return
     const key = `${granularity}|${activeTab}|${buckets.length}|${colW}` // colW settles after the first measure
     if (anchoredFor.current === key) return
+    const prev = anchoredFor.current
     anchoredFor.current = key
-    const left = todayBucket * colW
+    const ctx = `${granularity}|${activeTab}|${buckets.length}|`
+    // only the column width changed (a panel docked, the window resized): hold the
+    // same first period in view rather than jumping back to today
+    const widthOnly = prev.startsWith(ctx) && firstBucket.current != null
+    const keepBucket = widthOnly ? firstBucket.current : null
+    anchorColW.current = colW
+    const back = restoreRef.current && restoreRef.current.tabId === activeTab && restoreRef.current.bucket != null ? restoreRef.current : null
+    const wk = weekendKeep.current
+    weekendKeep.current = null
+    const left = back ? back.bucket * colW : wk != null ? wk * colW : keepBucket != null ? keepBucket * colW : todayBucket * colW
+    firstBucket.current = Math.round(left / colW)
     el.scrollLeft = left
     requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollLeft = left })
   }, [granularity, activeTab, todayBucket, colW, buckets.length, contentW]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const back = restoreRef.current
+    if (!back || back.tabId !== activeTab) return
+    restoreRef.current = null
+    if (back.selection?.length) setSelection(back.selection)
+    requestAnimationFrame(() => window.scrollTo({ top: back.scrollY ?? 0 }))
+  }, [activeTab])
+  ctxRef.current = { colW, selection }
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return undefined
@@ -1127,11 +1416,46 @@ export default function App() {
       el.removeEventListener('focusin', onFocus)
     }
   }, [scrollRef])
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return undefined
+    let user = false
+    const mark = () => { user = true }
+    const onEnd = () => {
+      if (!user || widthFrozen.current || !(anchorColW.current > 0)) return
+      user = false
+      firstBucket.current = Math.round(el.scrollLeft / anchorColW.current)
+    }
+    el.addEventListener('wheel', mark, { passive: true })
+    el.addEventListener('touchstart', mark, { passive: true })
+    el.addEventListener('scrollend', onEnd)
+    return () => { el.removeEventListener('wheel', mark); el.removeEventListener('touchstart', mark); el.removeEventListener('scrollend', onEnd) }
+  }, [scrollRef]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The low-point finder scrolls the grid to the lowest day; switching it off
+  // returns to the period the user was on before they asked.
+  const lowOrigin = useRef(null)
+  const toggleFindLow = () => {
+    setFindLow((on) => {
+      const el = scrollRef.current
+      if (!on) {
+        lowOrigin.current = firstBucket.current ?? (el && colW > 0 ? Math.round(el.scrollLeft / colW) : null)
+      } else if (lowOrigin.current != null && el) {
+        const b = lowOrigin.current
+        lowOrigin.current = null
+        firstBucket.current = b
+        requestAnimationFrame(() => el.scrollTo({ left: b * colW, behavior: 'smooth' }))
+      }
+      return !on
+    })
+  }
   const stepPeriod = (d) => {
     const el = scrollRef.current
     if (!el) return
-    const cur = Math.round(el.scrollLeft / colW)
-    el.scrollTo({ left: Math.max(0, (cur + d) * colW), behavior: 'smooth' })
+    const cur = firstBucket.current ?? Math.round(el.scrollLeft / colW)
+    const maxB = Math.max(0, Math.round((el.scrollWidth - el.clientWidth) / colW))
+    const next = Math.min(maxB, Math.max(0, cur + d))
+    firstBucket.current = next
+    el.scrollTo({ left: next * colW, behavior: 'smooth' })
   }
   // Chart grows to use vertical space in the full-screen scratchpad view.
   const chartH = scratchpad ? Math.max(340, Math.round(viewportH * 0.46)) : CHART_H
@@ -1238,6 +1562,9 @@ export default function App() {
   const lowest = daily.dailyClosing.length ? Math.min(...daily.dailyClosing) : 0
   const lowestIdx = daily.dailyClosing.length ? daily.dailyClosing.indexOf(lowest) : -1
   const netTotal = daily.dailyNet.reduce((a, b) => a + b, 0)
+  // Today's opening: the horizon's start balance carried through every actual day
+  // before today — the same position the balance panel splits across accounts.
+  const todayOpening = todayIdx > 0 ? daily.dailyClosing[todayIdx - 1] ?? 0 : Number(effectiveState.openingBalance) || 0
 
   const baseClosing = baseDaily.dailyClosing[baseDaily.dailyClosing.length - 1] ?? 0
   const baseLowest = baseDaily.dailyClosing.length ? Math.min(...baseDaily.dailyClosing) : 0
@@ -1276,11 +1603,112 @@ export default function App() {
     }
   }
 
+  // Weekends hidden: the chart drops Saturday and Sunday too, in every period.
+  // A balance line takes Monday's closing over the weekend (which already
+  // includes the weekend's flows); a flow series folds the weekend into Monday.
+  const weekendMask = useMemo(() => (showWeekends ? null : state.days.map((iso) => new Date(iso + 'T00:00:00Z').getUTCDay() % 6 === 0)), [showWeekends, state.days])
+  const nextVisible = useMemo(() => {
+    if (!weekendMask) return null
+    const n = weekendMask.length, nx = new Array(n)
+    let next = -1
+    for (let i = n - 1; i >= 0; i--) { if (!weekendMask[i]) next = i; nx[i] = next }
+    let prev = -1
+    for (let i = 0; i < n; i++) { if (!weekendMask[i]) prev = i; else if (nx[i] < 0) nx[i] = prev }
+    return nx
+  }, [weekendMask])
+  const carry = (s) => (weekendMask && s ? s.map((v, i) => (weekendMask[i] && nextVisible[i] >= 0 ? s[nextVisible[i]] : v)) : s)
+  const fold = (s) => {
+    if (!weekendMask || !s) return s
+    const o = s.slice()
+    for (let i = 0; i < o.length; i++) if (weekendMask[i] && nextVisible[i] >= 0 && nextVisible[i] !== i) { o[nextVisible[i]] += Number(s[i]) || 0 }
+    for (let i = 0; i < o.length; i++) if (weekendMask[i] && nextVisible[i] >= 0) o[i] = o[nextVisible[i]]
+    return o
+  }
+  // What the chart path follows: one account, or a whole company when its header
+  // is hovered (just the accounts in scope on an account / pool cut).
+  const pathAcct = useMemo(() => {
+    if (!chartPath || !balHover) return null
+    const hid = String(balHover.id)
+    if (hid.startsWith('co:')) {
+      const entityId = hid.slice(3)
+      const rows = closeBreakdown.filter((r) => r.entityId === entityId)
+      if (!rows.length) return null
+      const e = ENTITIES.find((x) => x.id === entityId)
+      return { id: hid, entityId, name: e?.company ?? entityId, color: rows[0].color, acctIds: view.accountIds ? rows.filter((r) => !r.unassigned).map((r) => r.id) : null }
+    }
+    const r = closeBreakdown.find((x) => x.id === balHover.id && !x.unassigned)
+    return r ? { id: r.id, entityId: r.entityId, name: `${r.name} ···${r.number}`, color: r.color, acctIds: [r.id] } : null
+  }, [chartPath, balHover, closeBreakdown, view.accountIds])
+  const pathSeries = useMemo(() => (pathAcct ? scopedDailySeries(shockedStates, displayCurrency, pathAcct.entityId, pathAcct.acctIds) : null), [pathAcct, shockedStates, displayCurrency])
+  // KPIs follow the path: the hovered account's / company's own figures
+  const pathKpi = useMemo(() => {
+    if (!pathSeries || !pathSeries.length) return null
+    const ti = state.days.indexOf(TODAY_ISO)
+    const closing = pathSeries[pathSeries.length - 1]
+    return {
+      opening: ti > 0 ? pathSeries[ti - 1] : pathSeries.opening,
+      closing,
+      net: closing - pathSeries.opening,
+      lowest: Math.min(...pathSeries),
+    }
+  }, [pathSeries, state.days])
+  // The grid follows the path too: same grouping and columns, with only the flows
+  // the hovered company / account carries and its own opening balance.
+  const gridAgg = useMemo(() => {
+    if (!pathSeries || !pathAcct) return agg
+    const set = pathAcct.acctIds ? new Set(pathAcct.acctIds) : null
+    const keep = (r) => !set || set.has(r.account?.id)
+    const srcs = viewSources(shockedStates)
+      .filter((s, i) => view.entityIds[i] === pathAcct.entityId && s.state)
+      .map((s) => ({ ...s, state: { ...s.state, inflows: s.state.inflows.filter(keep), outflows: s.state.outflows.filter(keep) } }))
+    return aggregateGrouped(srcs, groupLevels, buckets, pathSeries.opening, state.days.length)
+  }, [pathSeries, pathAcct, agg, viewSources, shockedStates, view.entityIds, groupLevels, buckets, state.days.length])
+  const shownLines = useMemo(() => (pathSeries
+    ? [{ id: 'acctpath', name: pathAcct.name, code: null, model: null, color: pathAcct.color, series: pathSeries, band: false, prominent: true, muted: false }]
+    : lines), [pathSeries, lines]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chartLines = useMemo(() => (weekendMask ? shownLines.map((l) => ({ ...l, series: focusActive ? fold(l.series) : carry(l.series) })) : shownLines), [shownLines, weekendMask, focusActive]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chartStack2 = useMemo(() => (pathSeries ? null : weekendMask && stack ? { ...stack, bands: stack.bands.map((b) => ({ ...b, values: fold(b.values) })) } : stack), [stack, weekendMask, pathSeries]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Toggling weekends in the Days view changes the column count. Hold the same
+  // day at the left edge (the bucket that now contains it), and tell the chart
+  // how far the scroll moves so its morph starts from where the line was on screen.
+  const wkKey = `${granularity}|${activeTab}|${showWeekends}`
+  const wkPrev = useRef({ key: wkKey, buckets })
+  const wkShift = useRef({ key: wkKey, shift: 0 })
+  const weekendKeep = useRef(null)
+  if (wkPrev.current.key !== wkKey) {
+    const p = wkPrev.current
+    let shift = 0
+    if (p.key.startsWith(`${granularity}|${activeTab}|`) && firstBucket.current != null && p.buckets[firstBucket.current]) {
+      const ob = p.buckets[firstBucket.current]
+      const d = ob.dayIndices[ob.dayIndices.length - 1]
+      const nb = buckets.findIndex((b) => b.dayIndices.includes(d))
+      if (nb >= 0) {
+        weekendKeep.current = nb
+        shift = nb * colW - firstBucket.current * (anchorColW.current || colW)
+      }
+    }
+    wkShift.current = { key: wkKey, shift }
+    wkPrev.current = { key: wkKey, buckets }
+  } else wkPrev.current.buckets = buckets
+  // With a panel docked the columns narrow. If whole-unit figures would no longer
+  // fit their cells, step up to thousands for as long as a panel is open; the
+  // user's own choice is untouched, so closing the panels restores it.
+  const widestFigure = useMemo(() => {
+    let m = 0
+    const scan = (arr) => { if (arr) for (const v of arr) { const a = Math.abs(Number(v) || 0); if (a > m) m = a } }
+    scan(agg.opening); scan(agg.closing); scan(agg.totalInflows); scan(agg.totalOutflows); scan(agg.net); scan(agg.sweep)
+    for (const r of [...(agg.inflowRows || []), ...(agg.outflowRows || [])]) scan(r.buckets || r.values)
+    return m
+  }, [agg])
+  const baseChars = Math.round(widestFigure).toLocaleString(displayLocale).length + (widestFigure > 0 ? 1 : 0) // + sign room
+  const bleeds = colW > 0 && baseChars * 7.6 + 16 > colW
+  const autoK = targetReserve > 0 && multiplier === 'base' && bleeds
+  const shownMultiplier = autoK ? 'k' : multiplier
   return (
-    <CurrencyProvider currency={displayCurrency} locale={displayLocale}>
+    <CurrencyProvider currency={displayCurrency} locale={displayLocale} multiplier={shownMultiplier}>
     <div className="shell">
-    <UniunRail theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} skin={skin} onToggleSkin={() => setSkin((s) => (s === 'enterprise' ? 'uniun' : 'enterprise'))} />
-    <div className={`app ${underlying || activeOutlier ? 'app--docked' : ''} ${balanceMode ? 'app--docked-left' : ''} ${nav.open ? 'app--navopen' : ''} ${nav.isOpen ? 'app--navshown' : ''}`}>
+    <UniunRail look={skin === 'uniun' ? theme : skin === 'fis' ? (theme === 'dark' ? 'fis-dark' : 'fis-light') : skin} onLook={(l) => { if (l === 'light' || l === 'dark') { setSkin('uniun'); setTheme(l) } else if (l === 'fis-light' || l === 'fis-dark') { setSkin('fis'); setTheme(l === 'fis-dark' ? 'dark' : 'light') } else { setSkin(l); setTheme('light') } }} />
+    <div ref={appRef} className={`app ${dock.right ? 'app--docked' : ''} ${dock.left ? 'app--docked-left' : ''} ${wantLeft && wantRight ? 'app--both' : ''} ${nav.open ? 'app--navopen' : ''} ${nav.isOpen ? 'app--navshown' : ''}`}>
       {/* grid navigator: breadcrumb bar + in-frame route browser */}
       <div className="gnavwrap">
       <div className="tabbar">
@@ -1300,7 +1728,8 @@ export default function App() {
           {/* The descriptive caption lives in the pill's tooltip rather than a
               subtitle line, to keep the header short. */}
           <h1>
-            <button className={`titlenav ${nav.isOpen ? 'titlenav--on' : ''}`} onClick={nav.toggle} aria-expanded={nav.isOpen} aria-label="Browse grids" title="Browse grids">
+            <button className={`titlenav ${nav.isOpen ? 'titlenav--on' : ''}`} onClick={nav.toggle} aria-expanded={nav.isOpen} aria-label="Change grid">
+              <span className="titlenav__label" aria-hidden>Change grid</span>
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" />
               </svg>
@@ -1378,7 +1807,10 @@ export default function App() {
         )}
         {/* right-aligned, so it lines up with the right edge of the last KPI card */}
         <div className="app__controls">
+          <span className={`app__mult ${shownMultiplier === 'k' ? 'app__mult--on' : ''} ${autoK ? 'app__mult--auto' : ''}`} title={autoK ? 'Shown in thousands while the side panels are open, so figures fit their narrower columns' : 'Grid figures in thousands'} aria-hidden={shownMultiplier !== 'k'}>{autoK && <span className="app__multauto">Auto</span>}000s</span>
+          <span className={`app__mult app__wkd ${!showWeekends ? 'app__mult--on' : ''}`} title={granularity === 'day' ? 'Weekends hidden — Saturday and Sunday are folded into Monday' : 'Weekends hidden in the Days view'} aria-hidden={showWeekends}>Mon–Fri</span>
           <Segmented value={granularity} onChange={setGranularity} onStart={markBusy} />
+          <ViewMenu multiplier={multiplier} onMultiplier={setMultiplier} autoK={autoK} showWeekends={showWeekends} onWeekends={setShowWeekends} showChart={showChart} onChart={setShowChart} groupArea={groupArea} onGroupArea={setGroupArea} />
         </div>
       </header>
 
@@ -1421,36 +1853,37 @@ export default function App() {
       </section>
       )}
 
-      <section className="metrics">
+      <section className={`metrics ${pathKpi ? 'metrics--path' : ''}`}>
         <Metric
           label="Opening balance"
-          value={state.openingBalance}
+          value={pathKpi ? pathKpi.opening : todayOpening}
           onFind={() => showBalance('opening')}
-          finding={balanceMode === 'opening'}
-          findTitle={balanceMode === 'opening' ? 'Hide the accounts behind the opening balance' : 'Show the actual account balances this opens on'}
+          finding={balOpen.opening}
+          findTitle={balOpen.opening ? 'Hide the accounts behind the opening balance' : 'Show the actual account balances this opens on'}
         />
         <Metric
           label="Net over horizon"
-          value={netTotal}
+          value={pathKpi ? pathKpi.net : netTotal}
           signed
-          impact={buildImpact(netTotal, baseNet, kpiScenario?.net)}
-        />
-        <Metric
-          label="Closing balance"
-          value={closingEnd}
-          impact={buildImpact(closingEnd, baseClosing, kpiScenario?.closing)}
-          onFind={() => showBalance('closing')}
-          finding={balanceMode === 'closing'}
-          findTitle={balanceMode === 'closing' ? 'Hide the accounts behind the closing balance' : 'Show the forecast account balances this ends on'}
+          impact={pathKpi ? undefined : buildImpact(netTotal, baseNet, kpiScenario?.net)}
         />
         <Metric
           label="Lowest point"
-          value={lowest}
-          tone={lowest < 0 ? 'danger' : undefined}
-          impact={buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
-          onFind={focusActive || lowestIdx < 0 ? undefined : () => setFindLow((v) => !v)}
+          value={pathKpi ? pathKpi.lowest : lowest}
+          tone={(pathKpi ? pathKpi.lowest : lowest) < 0 ? 'danger' : undefined}
+          impact={pathKpi ? undefined : buildImpact(lowest, baseLowest, kpiScenario?.lowest)}
+          onFind={focusActive || lowestIdx < 0 ? undefined : toggleFindLow}
           finding={findLow && !focusActive}
           findTitle={findLow ? 'Hide the lowest point on the chart' : 'Find the lowest point on the chart'}
+        />
+        {/* far right: the horizon's end, on the same side its panel docks */}
+        <Metric
+          label="Closing balance"
+          value={pathKpi ? pathKpi.closing : closingEnd}
+          impact={pathKpi ? undefined : buildImpact(closingEnd, baseClosing, kpiScenario?.closing)}
+          onFind={() => showBalance('closing')}
+          finding={balOpen.closing}
+          findTitle={balOpen.closing ? 'Hide the accounts behind the closing balance' : 'Show the forecast account balances this ends on'}
         />
       </section>
 
@@ -1505,7 +1938,7 @@ export default function App() {
       ) : null}
 
       {/* One scroll container so chart + table move and align together */}
-      <section className={`aligned ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''}`}>
+      <section className={`aligned aligned--area-${groupArea} ${scratchpad ? 'aligned--scratch' : ''} ${scratchClosing ? 'aligned--scratch-closing' : ''} ${pathSeries ? 'aligned--path' : ''}`}>
         {scratchpad && (
           <div className="scratchbar">
             <span className="scratchbar__title">
@@ -1522,7 +1955,8 @@ export default function App() {
           </div>
         )}
         {!scratchpad && (
-          <button className="expandbtn" onClick={openScratchpad} title="Expand to full-screen scratchpad">
+          <button className="expandbtn" onClick={openScratchpad} title="Expand to full-screen scratchpad" aria-label="Scratchpad">
+            <span className="expandbtn__label" aria-hidden>Scratchpad</span>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
             </svg>
@@ -1550,12 +1984,46 @@ export default function App() {
         >
           <span className="splitter__grip" aria-hidden />
         </div>
+        <div className="gridhead" ref={headRef}>
+          <div className="gridhead__clip">
+            <div className="gridhead__content" style={{ width: contentW + Math.max(0, availW - labelW - fitCols * colW) + freezeSlack }}>
+              <ForecastTable
+                headOnly
+                onHeadGroup={openGroupFromHead}
+                buckets={buckets}
+                agg={gridAgg}
+                granularity={granularity}
+                labelW={labelW}
+                colW={colW}
+                contentW={contentW}
+                readOnly={readOnly}
+                gridMode={gridMode}
+                periodStep={stepPeriod}
+                todayBucket={todayBucket}
+                periodEdge={edge}
+                groupMulti={groupMulti}
+                groupSingle={groupSingle}
+                groupChain={groupChain}
+                groupDisabled={groupDisabled}
+                chartStack={chartStack}
+              />
+            </div>
+          </div>
+        </div>
         <div className="aligned__scroll" ref={scrollRef} style={{ scrollPaddingLeft: labelW }}>
-          <div className="aligned__content" ref={alignedRef} style={{ width: contentW + Math.max(0, availW - labelW - target * colW) }}>
+          <div className="aligned__content" ref={alignedRef} style={{ width: contentW + Math.max(0, availW - labelW - fitCols * colW) + freezeSlack }}>
+            <div className={`chartwrap ${showChart ? '' : 'chartwrap--off'}`} aria-hidden={!showChart}>
+            <div className="chartwrap__inner">
             <AlignedChart
+              skipDays={weekendMask}
+              morphShift={wkShift.current.key === wkKey ? wkShift.current.shift : 0}
+              morphKey={`${granularity}|${showWeekends}`}
+              dockKey={dockKey}
+              dockShift={firstBucket.current != null && anchorColW.current > 0 ? firstBucket.current * (colW - anchorColW.current) : 0}
+              dockMs={PANEL_MS}
               days={state.days}
-              lines={lines}
-              stack={stack}
+              lines={chartLines}
+              stack={chartStack2}
               dailyNet={daily.dailyNet}
               buckets={buckets}
               labelW={labelW}
@@ -1577,6 +2045,8 @@ export default function App() {
               onOutlierClick={openOutlier}
               todayIndex={todayIdx >= 0 ? todayIdx : null}
             />
+            </div>
+            </div>
             <div className="tablewrap">
               {todayBucket >= 0 && todayIdx > 0 && <div className="todayrule" style={{ left: labelW + todayBucket * colW + (buckets[todayBucket].dayIndices.indexOf(todayIdx) / buckets[todayBucket].dayIndices.length) * colW }} aria-hidden />}
             <div className="tablebusy" aria-hidden="true">
@@ -1593,7 +2063,7 @@ export default function App() {
             </div>
             <ForecastTable
               buckets={buckets}
-              agg={agg}
+              agg={gridAgg}
               granularity={granularity}
               labelW={labelW}
               colW={colW}
@@ -1601,7 +2071,7 @@ export default function App() {
               onCell={setCell}
               onRowName={setRowName}
               onOpenBalance={showBalance}
-              balanceMode={balanceMode}
+              balanceMode={balOpen}
               onAddRow={addRow}
               readOnly={readOnly}
               canShock={!isScoped}
@@ -1635,13 +2105,34 @@ export default function App() {
             </div>
           </div>
         </div>
+        {/* Net movement / Sweep / Closing balance: a sticky strip, so it pins to the
+            viewport bottom natively while the grid runs past it. Horizontal position
+            mirrors the grid's scroller. */}
+        <div className="gridfoot" ref={footRef}>
+          <div className="gridfoot__content" style={{ width: contentW + Math.max(0, availW - labelW - fitCols * colW) + freezeSlack }}>
+            <ForecastTable
+              footOnly
+              buckets={buckets}
+              agg={gridAgg}
+              granularity={granularity}
+              labelW={labelW}
+              colW={colW}
+              contentW={contentW}
+              onOpenBalance={showBalance}
+              balanceMode={balOpen}
+              readOnly={readOnly}
+              gridMode={gridMode}
+              todayBucket={todayBucket}
+            />
+          </div>
+        </div>
         {modelRow && (
           <ModelPanel
             row={modelRow}
             detail={modelDetail(modelRow)}
             closing={modelClosing}
             /* sits directly below the chart, so it fills the table's area */
-            topOffset={chartH + (gridHasShocks || annotations.length > 0 ? 26 : 0)}
+            topOffset={showChart ? chartH + (gridHasShocks || annotations.length > 0 ? 26 : 0) : 0}
             onClose={closeModel}
           />
         )}
@@ -1660,19 +2151,55 @@ export default function App() {
       />
 
       <BalancePanel
-        open={!!balanceMode}
-        mode={balanceMode ?? 'opening'}
+        open={balOpen.opening}
+        mode="opening"
+        order={balOrder}
+        hover={balHover}
+        onHover={setBalHover}
+        chartPath={chartPath}
+        onChartPath={toggleChartPath}
+        sparks={balSparks}
+        compact={balCompact}
+        onCompact={setBalCompact}
+        todayFrac={todayFrac}
         view={view}
-        breakdown={breakdown}
-        total={balanceMode === 'closing' ? closingEnd : breakdown.reduce((s, r) => s + (Number(r.value) || 0), 0)}
+        breakdown={openBreakdown}
+        total={openBreakdown.reduce((s, r) => s + (Number(r.value) || 0), 0)}
         currency={displayCurrency}
         firstDay={TODAY_ISO}
         lastDay={state.days[state.days.length - 1]}
         activeTab={activeTab}
         origin={balanceOrigin}
         onSelectAccount={drillToAccount}
+        onSelectEntity={(id) => drillToAccount(id, true)}
         onBack={backToOrigin}
-        onClose={closeBalance}
+        onClose={() => closeBalance()}
+      />
+      <BalancePanel
+        open={balOpen.closing}
+        mode="closing"
+        side="right"
+        order={balOrder}
+        hover={balHover}
+        onHover={setBalHover}
+        chartPath={chartPath}
+        onChartPath={toggleChartPath}
+        sparks={balSparks}
+        compact={balCompact}
+        onCompact={setBalCompact}
+        todayFrac={todayFrac}
+        view={view}
+        breakdown={closeBreakdown}
+        total={closingEnd}
+        currency={displayCurrency}
+        firstDay={TODAY_ISO}
+        lastDay={state.days[state.days.length - 1]}
+        activeTab={activeTab}
+        origin={balanceOrigin}
+        onSelectAccount={drillToAccount}
+        onSelectEntity={(id) => drillToAccount(id, true)}
+        onBack={backToOrigin}
+        onClose={() => closeBalance()}
       />
 
       <UnderlyingPanel
@@ -1704,54 +2231,148 @@ export default function App() {
   )
 }
 
-// The Uniun signature: a 56px black rail carrying the brand mark and the app
-// switcher. This grid is the "Forecast" app (pink in the Uniun app taxonomy).
-function UniunRail({ theme, onToggleTheme, skin, onToggleSkin }) {
-  const apps = [
-    { id: 'forecast', label: 'Forecast', color: 'var(--app-forecast)', on: true },
-    { id: 'core', label: 'Core', color: 'var(--uniun-teal)' },
-    { id: 'payments', label: 'Payments', color: 'var(--uniun-blue)' },
-    { id: 'journal', label: 'Journal', color: 'var(--uniun-purple)' },
-    { id: 'pulse', label: 'Pulse', color: 'var(--uniun-cyan)' },
-  ]
+// The Uniun shell rail, as in the live Honeycomb app: white, hairline edge,
+// brand mark on top, the current app's rich icon, then help / Pulse / avatar.
+const LOOKS = [
+  { id: 'light', label: 'Standard - Light' },
+  { id: 'dark', label: 'Standard - Dark' },
+  { id: 'enterprise', label: 'Enterprise' },
+  { id: 'fis-light', label: 'FIS - Light' },
+  { id: 'fis-dark', label: 'FIS - Dark' },
+]
+function SkinMenu({ look, onLook }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  const cur = LOOKS.find((l) => l.id === look) ?? LOOKS[0]
+  return (
+    <span ref={ref} className={`skinmenu ${open ? 'skinmenu--open' : ''}`}>
+      <button className="themebtn" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} title={`Appearance: ${cur.label}`} aria-label="Appearance">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+      {open && (
+        <span className="skinmenu__panel" role="menu">
+          <span className="skinmenu__title">Appearance</span>
+          {LOOKS.map((l) => (
+            <button key={l.id} role="menuitemradio" aria-checked={l.id === look} className={`skinmenu__opt ${l.id === look ? 'skinmenu__opt--on' : ''}`} onClick={() => { onLook(l.id); setOpen(false) }}>
+              <span className={`skinmenu__sw skinmenu__sw--${l.id}`} aria-hidden />
+              <span className="skinmenu__name">{l.label}</span>
+              {l.id === look && <svg className="skinmenu__tick" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 8.5 6.5 12 13 4.5" /></svg>}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function UniunRail({ look, onLook }) {
   return (
     <nav className="rail" aria-label="Uniun apps">
       <span className="rail__brand" title="Uniun">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
-          <path d="M12 2.2 20.5 7v10L12 21.8 3.5 17V7z" fill="none" stroke="var(--uniun-green)" strokeWidth="2" strokeLinejoin="round" />
-          <path d="M12 8.1 16.3 10.6v4.9L12 18l-4.3-2.5v-4.9z" fill="var(--uniun-green)" />
-        </svg>
+        <img className="rail__mark--dark" src={brandMarkDark} alt="Uniun" />
+        <img className="rail__mark--light" src={brandMarkLight} alt="Uniun" />
+        <img className="rail__mark--fis" src={fisLogo} alt="FIS" />
       </span>
       <span className="rail__apps">
-        {apps.map((a) => (
-          <button
-            key={a.id}
-            className={`railapp ${a.on ? 'railapp--on' : ''}`}
-            style={{ '--app-color': a.color }}
-            title={a.on ? `${a.label} (current)` : `${a.label} — not in this prototype`}
-            aria-current={a.on ? 'page' : undefined}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-              <path d="M12 2.8 19.6 7.4v9.2L12 21.2 4.4 16.6V7.4z" fill="currentColor" />
-            </svg>
-          </button>
-        ))}
+        <button className="railapp railapp--on" title="Forecast (current)" aria-current="page">
+          <span className="railapp__badge" aria-hidden>F</span>
+        </button>
       </span>
       <span className="rail__foot">
-        <button
-          className={`themebtn skinbtn ${skin === 'enterprise' ? 'skinbtn--on' : ''}`}
-          onClick={onToggleSkin}
-          aria-pressed={skin === 'enterprise'}
-          title={skin === 'enterprise' ? 'Switch to the Uniun skin' : 'Switch to the Enterprise skin'}
-          aria-label="Toggle Enterprise skin"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M3 9h18M3 14h18M9 9v11" />
-          </svg>
-        </button>
-        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        <span className="rail__tools">
+          <SkinMenu look={look} onLook={onLook} />
+        </span>
+        <button className="railhelp" title="Help" aria-label="Help">?</button>
+        <button className="railpulse" title="Pulse" aria-label="Pulse"><svg viewBox="50 80 162 72" width="46" height="20" aria-hidden>
+            <circle fill="#00EDFF" cx="135.63" cy="125.08" r="22" />
+            <path fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" d="M55.63,125.08h15.46c2.74,0,5.21-1.67,6.23-4.22l12.76-31.91c2.150-5.38,9.64-5.69,12.230-0.51l27.31,54.63c2.47,4.95,9.53,4.95,12,0l11-21.99c1.66-3.32,5.69-4.66,9-3.16l30.99,11" />
+          </svg></button>
+        <button className="railavatar" title="Your account" aria-label="Your account">GL</button>
       </span>
     </nav>
+  )
+}
+
+function ViewSwitch({ on, onChange, label }) {
+  return (
+    <button className={`vswitch ${on ? 'vswitch--on' : ''}`} role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}>
+      <span className="vswitch__knob" aria-hidden />
+    </button>
+  )
+}
+
+// "View" — a home for display controls. Opens a small popover under the button.
+function ViewMenu({ multiplier, onMultiplier, autoK, showWeekends, onWeekends, showChart, onChart, groupArea, onGroupArea }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  return (
+    <div className={`viewmenu ${open ? 'viewmenu--open' : ''}`} ref={ref}>
+      <button className="viewmenu__btn" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="dialog" aria-label="View">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" />
+        </svg>
+        <span className="viewmenu__label" aria-hidden>View</span>
+      </button>
+      {open && (
+        <div className="viewmenu__panel" role="dialog" aria-label="View options">
+          <div className="viewmenu__title">View</div>
+          <div className="viewmenu__row">
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Number format</span>
+              <span className="viewmenu__hint">{autoK ? 'Thousands while panels are open' : multiplier === 'k' ? 'Grid figures in thousands' : 'Grid figures in whole units'}</span>
+            </span>
+            <span className="seg seg--sm viewmenu__seg" role="radiogroup" aria-label="Number format">
+              {[['base', 'Base'], ['k', 'K']].map(([k, label]) => (
+                <button key={k} className={`seg__btn ${multiplier === k ? 'seg__btn--on' : ''}`} role="radio" aria-checked={multiplier === k} onClick={() => onMultiplier(k)}>{label}</button>
+              ))}
+            </span>
+          </div>
+          <div className="viewmenu__row">
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Weekends</span>
+              <span className="viewmenu__hint">{showWeekends ? 'Shown as their own days' : 'Folded into Monday (Days view)'}</span>
+            </span>
+            <ViewSwitch on={showWeekends} onChange={onWeekends} label="Show weekends" />
+          </div>
+          <div className="viewmenu__row">
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Chart</span>
+              <span className="viewmenu__hint">{showChart ? 'Daily balance above the grid' : 'Grid only'}</span>
+            </span>
+            <ViewSwitch on={showChart} onChange={onChart} label="Show chart" />
+          </div>
+          <div className={`viewmenu__row ${showChart ? '' : 'viewmenu__row--off'}`}>
+            <span className="viewmenu__label-text">
+              <span className="viewmenu__name">Grouping area</span>
+              <span className="viewmenu__hint">{groupArea === 'context' ? 'Chart key pinned above the groupings' : 'Chart runs under the groupings'}</span>
+            </span>
+            <span className="seg seg--sm viewmenu__seg" role="radiogroup" aria-label="Grouping area">
+              {[['chart', 'Chart'], ['context', 'Context']].map(([k, label]) => (
+                <button key={k} className={`seg__btn ${groupArea === k ? 'seg__btn--on' : ''}`} role="radio" aria-checked={groupArea === k} disabled={!showChart} onClick={() => onGroupArea(k)}>{label}</button>
+              ))}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1761,6 +2382,13 @@ function Segmented({ value, onChange, onStart }) {
   const boxRef = useRef(null)
   const btnRefs = useRef({})
   const [pill, setPill] = useState(null)
+  // a faint ghost of the pill glides to whichever option is under the pointer
+  const [ghost, setGhost] = useState(null)
+  const hoverAt = (k) => {
+    const el = btnRefs.current[k]
+    if (!el) return
+    setGhost({ left: el.offsetLeft, width: el.offsetWidth, on: k !== shown })
+  }
   // The pill follows a local choice set on click, so it slides immediately;
   // the expensive grid re-render is deferred until after that frame paints.
   const [shown, setShown] = useState(value)
@@ -1782,7 +2410,8 @@ function Segmented({ value, onChange, onStart }) {
     return () => ro.disconnect()
   }, [shown])
   return (
-    <div className="seg seg--slide" role="tablist" aria-label="Granularity" ref={boxRef}>
+    <div className="seg seg--slide" role="tablist" aria-label="Granularity" ref={boxRef} onMouseLeave={() => setGhost((g) => (g ? { ...g, on: false } : g))}>
+      {ghost && <span className={`seg__ghost ${ghost.on ? 'seg__ghost--on' : ''}`} style={{ transform: `translateX(${ghost.left}px)`, width: ghost.width }} aria-hidden />}
       {pill && <span className="seg__pill" style={{ transform: `translateX(${pill.left}px)`, width: pill.width }} aria-hidden />}
       {GRANULARITIES.map((g) => (
         <button
@@ -1791,7 +2420,8 @@ function Segmented({ value, onChange, onStart }) {
           role="tab"
           aria-selected={shown === g.key}
           className={`seg__btn ${shown === g.key ? 'seg__btn--on' : ''}`}
-          onClick={() => choose(g.key)}
+          onMouseEnter={() => hoverAt(g.key)}
+          onClick={() => { choose(g.key); setGhost((gh) => (gh ? { ...gh, on: false } : gh)) }}
         >
           {g.label}
         </button>
@@ -2034,7 +2664,8 @@ function CurrencyPicker({ value, onChange }) {
         aria-label={`Group currency: ${value}. Change it.`}
         title="Change the currency the group is shown in"
       >
-        {value}
+        <span className="ccypick__lead" aria-hidden>Display in</span>
+        <span className="ccypick__val">{value}</span>
         <svg className="ccypick__chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="M4 6.5 8 10.5 12 6.5" />
         </svg>
@@ -2051,7 +2682,9 @@ function CurrencyPicker({ value, onChange }) {
             >
               <span className="ccypick__code">{c.code}</span>
               <span className="ccypick__sym">{CCY_SYMBOL[c.code]}</span>
-              {c.code === value && <span className="ccypick__tick" aria-hidden>✓</span>}
+              {c.code === value && (
+                <svg className="ccypick__tick" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M5 12l5 5L20 7" /></svg>
+              )}
             </button>
           ))}
         </span>
@@ -2162,29 +2795,6 @@ function SeriesRow({ s, fixed, selected, onSelect, bandOn, onToggleBand }) {
         <BandToggle on={bandOn} color={s.color} onClick={onToggleBand} />
       </span>
     </div>
-  )
-}
-
-function ThemeToggle({ theme, onToggle }) {
-  const dark = theme === 'dark'
-  return (
-    <button
-      className="themebtn"
-      onClick={onToggle}
-      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      aria-label="Toggle colour theme"
-    >
-      {dark ? (
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-          <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
-        </svg>
-      )}
-    </button>
   )
 }
 

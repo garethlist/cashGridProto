@@ -255,35 +255,35 @@ export function accountBalances(states, view, displayCurrency, mode = 'opening')
     // What the forecast moves across each account over the whole horizon, in the
     // entity's own currency. Rows added by hand carry no account yet, so their
     // movement is held aside rather than silently dropped.
-    const moves = {}
-    let loose = 0
-    // 'opening' is today's position: with actuals ahead of today, that's the 1 Jan
-    // balance carried through every actual day. 'closing' runs the whole horizon.
-    const upto = closing ? Infinity : (st.todayIndex || 0)
-    if (closing || upto > 0) {
-      const walk = (rows, sign) => {
-        for (const r of rows) {
-          const total = r.values.slice(0, upto === Infinity ? undefined : upto).reduce((s, v) => s + (Number(v) || 0), 0) * sign
-          const k = r.account?.id
-          if (k) moves[k] = (moves[k] ?? 0) + total
-          else loose += total
-        }
+    // Actuals aren't modelled per account, so today's position is one entity
+    // figure split by the accounts' weights. Both ends start from that split:
+    // 'opening' is the split itself; 'closing' adds what the forecast moves across
+    // each account from today on. Rows with no account are held aside.
+    const upto = st.todayIndex || 0
+    let actualAll = 0
+    const fMoves = {}
+    let fLoose = 0
+    const walk = (rows, sign) => {
+      for (const r of rows) {
+        let act = 0, fc = 0
+        r.values.forEach((v, i) => { const n = (Number(v) || 0) * sign; if (i < upto) act += n; else fc += n })
+        actualAll += act
+        const k = r.account?.id
+        if (k) fMoves[k] = (fMoves[k] ?? 0) + fc
+        else fLoose += fc
       }
-      walk(st.inflows, 1)
-      walk(st.outflows, -1)
     }
-
-    // Today's opening is one entity position split by the same account weights as 1 Jan
-    // (actuals aren't modelled per account), so every account holds a slice of it.
-    const todaySplit = !closing && upto > 0
-    const entityToday = todaySplit ? (Number(st.openingBalance) || 0) + Object.values(moves).reduce((s, x) => s + x, 0) + loose : 0
+    walk(st.inflows, 1)
+    walk(st.outflows, -1)
+    const entityToday = (Number(st.openingBalance) || 0) + actualAll
     const weights = e.accounts.map((x) => (x.openShare != null ? x.openShare : 1))
     const wSum = weights.reduce((s, w) => s + w, 0) || 1
+    const loose = fLoose
     for (const [ai, a] of e.accounts.entries()) {
       if (view.accountIds && !view.accountIds.has(a.id)) continue
-      const open = opens[a.id] ?? 0
-      const move = todaySplit ? 0 : moves[a.id] ?? 0
-      const local = todaySplit ? entityToday * (weights[ai] / wSum) : open + move
+      const todayShare = upto > 0 ? entityToday * (weights[ai] / wSum) : opens[a.id] ?? 0
+      const move = closing ? fMoves[a.id] ?? 0 : 0
+      const local = todayShare + move
       out.push({
         ...a,
         entityId: e.id,
@@ -326,6 +326,55 @@ export function accountBalances(states, view, displayCurrency, mode = 'opening')
       })
     }
   }
+  return out
+}
+
+// The same running balance for a whole company (acctIds null) or any set of its
+// accounts. A whole company starts from its own opening and takes every row,
+// account-less ones included, so it ends on the company's closing figure.
+export function scopedDailySeries(states, displayCurrency, entityId, acctIds = null) {
+  const outFx = CCY_FX[displayCurrency] ?? 1
+  const e = ENTITIES.find((x) => x.id === entityId)
+  const st = states[entityId]
+  if (!e || !st) return null
+  const conv = fxConv(e.fx, outFx)
+  const set = acctIds ? new Set(acctIds) : null
+  const D = st.days.length
+  const upto = st.todayIndex || 0
+  const all = new Array(D).fill(0)
+  const own = new Array(D).fill(0)
+  const add = (rows, sign) => {
+    for (const r of rows) {
+      const mine = !set || set.has(r.account?.id)
+      for (let i = 0; i < D; i++) { const n = (Number(r.values[i]) || 0) * sign; all[i] += n; if (mine) own[i] += n }
+    }
+  }
+  add(st.inflows, 1)
+  add(st.outflows, -1)
+  // the accounts' share of the company, by the same weights the balance panes use
+  let share = 1
+  if (set) {
+    const w = e.accounts.map((x) => (x.openShare != null ? x.openShare : 1))
+    const wSum = w.reduce((s, x) => s + x, 0) || 1
+    share = e.accounts.reduce((s, a, i) => s + (set.has(a.id) ? w[i] : 0), 0) / wSum
+  }
+  const opens = accountOpenings(st)
+  const open0 = set ? (upto > 0 ? (Number(st.openingBalance) || 0) * share : [...set].reduce((s, id) => s + (opens[id] ?? 0), 0)) : Number(st.openingBalance) || 0
+  // Actual days: the company's own running balance scaled to the accounts' share
+  // (actuals aren't booked per account). From today the accounts carry their own
+  // forecast flows, so the line ends on the closing pane's figure.
+  const out = new Array(D)
+  let ent = Number(st.openingBalance) || 0
+  let bal = 0
+  for (let i = 0; i < D; i++) {
+    if (i < upto) { ent += all[i]; out[i] = conv(ent * share) }
+    else {
+      if (i === upto) bal = upto > 0 ? ent * share : open0
+      bal += own[i]
+      out[i] = conv(bal)
+    }
+  }
+  out.opening = conv(open0)
   return out
 }
 
