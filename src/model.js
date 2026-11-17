@@ -377,6 +377,32 @@ export function levelKeys(sources) {
   return out
 }
 
+// The grouping levels a set of sources has made redundant, each with the reason
+// the picker shows in its place. Category always stays — it's the fallback.
+export function disabledLevels(sources) {
+  const keys = levelKeys(sources)
+  const out = {}
+  const n = (lv) => keys[lv]?.size ?? 0
+  if (n('currency') <= 1) out.currency = `All rows are ${[...(keys.currency ?? [])][0] ?? 'one currency'}`
+  if (n('bankAccount') <= 1) out.bankAccount = 'This grid is one account'
+  if (n('cashPool') <= 1) {
+    const only = [...(keys.cashPool ?? [])][0]
+    out.cashPool = only === 'unpooled' ? 'No accounts here are pooled' : 'This grid is one pool'
+  }
+  if (n('sourceType') <= 1) {
+    const only = [...(keys.sourceType ?? [])][0]
+    out.sourceType = only === SOURCE_TYPE_UNSET ? 'No rows here carry a source type' : `All rows are ${only}`
+  }
+  return out
+}
+
+// The levels actually applied for a chosen grouping: the choice minus whatever
+// the grid has made redundant, falling back to Category if that empties it.
+export function appliedLevels(selection, disabled) {
+  const kept = selection.filter((lv) => !disabled[lv])
+  return kept.length ? kept : ['category']
+}
+
 // `sources` = [{ meta: { currency }, state, conv }] where conv converts a daily
 // value into the displayed currency. Returns the same shape as aggregate(),
 // with the rows flattened depth-first and each carrying its tree position.
