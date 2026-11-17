@@ -602,9 +602,9 @@ export default function App() {
     [tabStates, shocksForTab]
   )
   // ---- Agent (prototype) ----------------------------------------------------
-  // A right-hand dock where questions about the forecast come back as links to
-  // the cells behind them. It shares the right dock with the drill-ins and steps
-  // aside while one is open, so closing the drill-in brings the conversation back.
+  // A left-hand dock where questions about the forecast come back as links to
+  // the cells behind them. Following one opens the cell's drill-in on the right,
+  // so the answers and the invoices behind them sit side by side.
   const [agentOpen, setAgentOpen] = useState(false)
   const [agentMsgs, setAgentMsgs] = useState([])
   const [agentBusy, setAgentBusy] = useState(false)
@@ -1259,10 +1259,11 @@ export default function App() {
   // The end width is known up front — the reserve is the panel width — so the
   // chart and grid render once at their final size in the same render as the
   // click, and the sliding frame just reveals or covers that layout.
-  // the agent steps aside for any drill-in on the right and returns when it closes
-  const agentShown = agentOpen && !underlying && !activeOutlier && !balOpen.closing
-  const wantRight = !!(underlying || activeOutlier || balOpen.closing || agentShown)
-  const wantLeft = balOpen.opening
+  // The agent docks left, so a drill-in it sends you to opens on the right beside
+  // it. It only steps aside for the opening-balance pane, which shares the left.
+  const agentShown = agentOpen && !balOpen.opening
+  const wantRight = !!(underlying || activeOutlier || balOpen.closing)
+  const wantLeft = balOpen.opening || agentShown
   const dock = { left: wantLeft, right: wantRight }
   const reserveFor = (l, r) => {
     if (typeof window === 'undefined') return 0

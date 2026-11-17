@@ -21,7 +21,7 @@ const fmt = (amount, ccy) => {
   }
 }
 
-// Right-hand agent dock: a short conversation where answers can be clicked
+// Left-hand agent dock: a short conversation where answers can be clicked
 // through to the grid cell that holds them.
 export default function AgentPanel({ open, gridTitle, messages, busy, activeKey, onSend, onFollow, onClose }) {
   const [draft, setDraft] = useState('')
