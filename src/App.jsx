@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, cellUnderlying, modelDetail, uid, monthOrdinals, findFlowOutliers, attributeOutlier, SCENARIOS, SOURCE_TYPE_UNSET } from './model.js'
+import { computeDaily, bucketize, aggregateGrouped, GROUP_LEVELS, CASH_POOLS, consolidate, applyShocks, shockState, scopeState, levelKeys, disabledLevels, appliedLevels, cellUnderlying, modelDetail, uid, monthOrdinals, findFlowOutliers, attributeOutlier, SCENARIOS, SOURCE_TYPE_UNSET } from './model.js'
 import {
   BASE_CCY, SUMMARY, CCY_SYMBOL, GROUP_CURRENCIES, ENTITIES, buildEntityStates,
   CCY_LOCALE, CCY_FX, ALL_ACCOUNTS, ALL_POOLS, VIEW_DIMS, acctTab, poolTab, resolveView, EUR_SWEEP,
@@ -12,6 +12,8 @@ import UnderlyingPanel from './components/UnderlyingPanel.jsx'
 import ModelPanel from './components/ModelPanel.jsx'
 import BalancePanel from './components/BalancePanel.jsx'
 import OutlierPanel from './components/OutlierPanel.jsx'
+import AgentPanel, { AgentIcon, AgentTrailBar } from './components/AgentPanel.jsx'
+import { topInvoices, intentOf } from './agent.js'
 import ShockIcon from './components/ShockIcon.jsx'
 import FinderIcon from './components/FinderIcon.jsx'
 import OutlierIcon from './components/OutlierIcon.jsx'
@@ -256,6 +258,7 @@ export default function App() {
   // flattens out of the balance.
   const [selection, setSelection] = useState([])
   const [underlying, setUnderlying] = useState(null) // { section, row, bucket, data } for the Base-mode detail panel
+  const [focusInvoice, setFocusInvoice] = useState(null) // an invoice id the agent sent us to — lit in the underlying panel
   // Which end of the horizon the left-hand balance panel is showing, if any:
   // 'opening' (actual, yesterday's closing ledger) or 'closing' (forecast).
   // Opening docks left, closing docks right — both can be open at once.
@@ -559,29 +562,11 @@ export default function App() {
   // pool". Any level the current scope has collapsed to one key is retired from
   // the picker, with the reason shown in its place. Category always stays — it's
   // the fallback when everything else drops out.
-  const groupDisabled = useMemo(() => {
-    const keys = levelKeys(groupSources)
-    const out = {}
-    const n = (lv) => keys[lv]?.size ?? 0
-    if (n('currency') <= 1) out.currency = `All rows are ${[...(keys.currency ?? [])][0] ?? 'one currency'}`
-    if (n('bankAccount') <= 1) out.bankAccount = 'This grid is one account'
-    if (n('cashPool') <= 1) {
-      const only = [...(keys.cashPool ?? [])][0]
-      out.cashPool = only === 'unpooled' ? 'No accounts here are pooled' : 'This grid is one pool'
-    }
-    if (n('sourceType') <= 1) {
-      const only = [...(keys.sourceType ?? [])][0]
-      out.sourceType = only === SOURCE_TYPE_UNSET ? 'No rows here carry a source type' : `All rows are ${only}`
-    }
-    return out
-  }, [groupSources])
+  const groupDisabled = useMemo(() => disabledLevels(groupSources), [groupSources])
 
   // The levels actually applied: your selection with the retired ones dropped,
   // falling back to Category if that empties it out.
-  const groupLevels = useMemo(() => {
-    const kept = groupSelection.filter((lv) => !groupDisabled[lv])
-    return kept.length ? kept : ['category']
-  }, [groupSelection, groupDisabled])
+  const groupLevels = useMemo(() => appliedLevels(groupSelection, groupDisabled), [groupSelection, groupDisabled])
 
   const agg = useMemo(
     () => aggregateGrouped(groupSources, groupLevels, buckets, effectiveState.openingBalance, state.days.length),
@@ -599,6 +584,7 @@ export default function App() {
     const dailyValues = bucket.dayIndices.map((i) => Number(row.values[i]) || 0)
     const data = cellUnderlying(row, bucket, dailyValues, state.days)
     setOutlierDay(null) // the drill-ins share the right-hand dock
+    setFocusInvoice(null)
     setBalOpen((b) => (b.closing ? { ...b, closing: false } : b))
     // clicking the cell that's already open closes the panel again
     setUnderlying((cur) =>
@@ -607,7 +593,7 @@ export default function App() {
         : { section, row, bucket, data }
     )
   }, [state.days])
-  const closeUnderlying = useCallback(() => setUnderlying(null), [])
+  const closeUnderlying = useCallback(() => { setUnderlying(null); setFocusInvoice(null) }, [])
 
   // Entity data with each company's own shocks baked in — the same figures the
   // grid is built from, so an account's forecast balance reconciles with it.
@@ -615,6 +601,124 @@ export default function App() {
     () => Object.fromEntries(ENTITIES.map((e) => [e.id, shockState(tabStates[e.id], shocksForTab(e.id))])),
     [tabStates, shocksForTab]
   )
+  // ---- Agent (prototype) ----------------------------------------------------
+  // A left-hand dock where questions about the forecast come back as links to
+  // the cells behind them. Following one opens the cell's drill-in on the right,
+  // so the answers and the invoices behind them sit side by side.
+  const [agentOpen, setAgentOpen] = useState(false)
+  const [agentMsgs, setAgentMsgs] = useState([])
+  const [agentBusy, setAgentBusy] = useState(false)
+  // While following an answer: where you asked from (`ctx`), the answer set and
+  // which one you're on. Drives the bar across the top.
+  const [agentTrail, setAgentTrail] = useState(null)
+  const pendingInvoice = useRef(null)
+  const [pendingTick, setPendingTick] = useState(0)
+
+  // Every company grid feeding this one, set up exactly as that grid would be
+  // shown — same grouping, same buckets — so a result's row and cell exist there.
+  const agentTargets = useCallback(() => {
+    const outFx = CCY_FX[displayCurrency] ?? 1
+    return view.entityIds.map((id) => {
+      const e = ENTITIES.find((x) => x.id === id)
+      const sources = [{ meta: { currency: e.currency }, state: shockedStates[id], conv: (v) => v }]
+      return {
+        tabId: id,
+        title: resolveView(id).title,
+        currency: e.currency,
+        sources,
+        levels: appliedLevels(groupSelection, disabledLevels(sources)),
+        toDisplay: fxConv(e.fx, outFx),
+      }
+    })
+  }, [view.entityIds, displayCurrency, shockedStates, groupSelection])
+
+  const sendAgent = useCallback((text) => {
+    setAgentMsgs((m) => [...m, { role: 'user', text }])
+    setAgentBusy(true)
+    const intent = intentOf(text)
+    const title = view.title
+    const ccy = displayCurrency
+    window.setTimeout(() => {
+      let reply
+      if (intent.kind === 'topInvoices') {
+        // each answer is tied to the timeframe it was read at — its cell only exists there
+        const results = topInvoices(agentTargets(), buckets, state.days, TODAY_ISO, intent.limit).map((r) => ({ ...r, granularity }))
+        const grids = new Set(results.map((r) => r.tabId)).size
+        reply = results.length
+          ? {
+              role: 'agent',
+              text: `Here are the ${results.length} highest-value invoices still to settle in the ${title} forecast${grids > 1 ? `, across ${grids} companies` : ''}, ranked by value in ${ccy}. Select one to open it where it lives.`,
+              results,
+              note: 'From the invoice registers behind Customer Receipts and Suppliers, today onwards.',
+            }
+          : { role: 'agent', text: 'I couldn’t find any open invoices in this forecast.' }
+      } else {
+        reply = { role: 'agent', text: 'This is a prototype — for now I can answer one kind of question. Try:', suggest: true }
+      }
+      setAgentMsgs((m) => [...m, reply])
+      setAgentBusy(false)
+    }, 900)
+  }, [agentTargets, buckets, state.days, view.title, displayCurrency, granularity])
+
+  // Follow an answer: remember where we are (only the first time, so "back"
+  // always returns to where the question was asked), then go to the grid. The
+  // cell is opened once that grid has rendered — see the effect by restoreRef.
+  const followInvoice = useCallback((results, index) => {
+    const r = results[index]
+    if (!r) return
+    setAgentTrail((cur) => ({
+      ctx: cur?.ctx ?? {
+        tabId: activeTab,
+        title: view.title,
+        granularity,
+        bucket: ctxRef.current.colW > 0 && scrollRef.current ? Math.round(scrollRef.current.scrollLeft / ctxRef.current.colW) : null,
+        scrollY: window.scrollY,
+        selection: ctxRef.current.selection,
+      },
+      results,
+      index,
+    }))
+    setBalOpen({ opening: false, closing: false })
+    setOutlierDay(null)
+    setBalanceOrigin(null)
+    pendingInvoice.current = r
+    if (r.granularity !== granularity) setGranularity(r.granularity)
+    if (r.tabId !== activeTab) setActiveTab(r.tabId)
+    setPendingTick((t) => t + 1)
+  }, [activeTab, view.title, granularity]) // eslint-disable-line react-hooks/exhaustive-deps
+  const stepAgentTrail = useCallback((d) => {
+    if (agentTrail) followInvoice(agentTrail.results, agentTrail.index + d)
+  }, [agentTrail, followInvoice])
+  // Back to where the question was asked: same grid, timeframe, period window,
+  // page scroll and selected rows, with the conversation open again.
+  const backFromAgent = useCallback(() => {
+    const t = agentTrail
+    if (!t) return
+    const { ctx } = t
+    pendingInvoice.current = null
+    setAgentTrail(null)
+    setFocusInvoice(null)
+    setUnderlying(null)
+    setGranularity(ctx.granularity)
+    setAgentOpen(true)
+    if (ctx.tabId !== activeTab) {
+      restoreRef.current = { ...ctx }
+      setActiveTab(ctx.tabId)
+    } else {
+      setSelection(ctx.selection ?? [])
+      const put = () => {
+        const el = scrollRef.current
+        const w = ctxRef.current.colW
+        if (el && ctx.bucket != null && w > 0) { el.scrollLeft = ctx.bucket * w; firstBucket.current = ctx.bucket }
+        window.scrollTo({ top: ctx.scrollY ?? 0 })
+      }
+      requestAnimationFrame(put)
+      window.setTimeout(put, 280) // after the dock's width transition settles
+    }
+  }, [agentTrail, activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Stay where the answer led: drop the bar, keep the cell and panel open.
+  const dismissAgentTrail = useCallback(() => { setAgentTrail(null) }, [])
+
   // The balance at whichever end of the horizon is being inspected, broken into
   // the bank accounts the active grid draws on. The panel is left open across grid
   // changes — it re-reads for whichever grid you land on, which is what makes
@@ -1155,8 +1259,11 @@ export default function App() {
   // The end width is known up front — the reserve is the panel width — so the
   // chart and grid render once at their final size in the same render as the
   // click, and the sliding frame just reveals or covers that layout.
+  // The agent docks left, so a drill-in it sends you to opens on the right beside
+  // it. It only steps aside for the opening-balance pane, which shares the left.
+  const agentShown = agentOpen && !balOpen.opening
   const wantRight = !!(underlying || activeOutlier || balOpen.closing)
-  const wantLeft = balOpen.opening
+  const wantLeft = balOpen.opening || agentShown
   const dock = { left: wantLeft, right: wantRight }
   const reserveFor = (l, r) => {
     if (typeof window === 'undefined') return 0
@@ -1381,7 +1488,39 @@ export default function App() {
     if (back.selection?.length) setSelection(back.selection)
     requestAnimationFrame(() => window.scrollTo({ top: back.scrollY ?? 0 }))
   }, [activeTab])
-  ctxRef.current = { colW, selection }
+  ctxRef.current = { colW, selection }  // Land on an agent result once its grid has rendered: open the cell's
+  // underlying invoices with the one we came for lit, and bring the cell into
+  // view — retried while the dock's width transition re-lays the columns.
+  useEffect(() => {
+    const r = pendingInvoice.current
+    if (!r || r.tabId !== activeTab || r.granularity !== granularity) return
+    const rows = r.section === 'inflows' ? agg.inflowRows : agg.outflowRows
+    const row = rows.find((x) => x.id === r.rowId)
+    const bi = buckets.findIndex((b) => b.key === r.bucketKey)
+    if (!row || bi < 0) return
+    pendingInvoice.current = null
+    const bucket = buckets[bi]
+    const dailyValues = bucket.dayIndices.map((i) => Number(row.values[i]) || 0)
+    setUnderlying({ section: r.section, row, bucket, data: cellUnderlying(row, bucket, dailyValues, state.days) })
+    setFocusInvoice(r.id)
+    const place = () => {
+      const el = scrollRef.current
+      const w = ctxRef.current.colW
+      if (el && w > 0) {
+        const first = Math.max(0, bi - 1) // one period of context to the left
+        el.scrollLeft = first * w
+        firstBucket.current = first
+      }
+      const cell = el?.querySelector('.grid__cell--active')
+      if (cell) {
+        const top = cell.getBoundingClientRect().top
+        if (top < 160 || top > window.innerHeight - 140) window.scrollBy({ top: top - window.innerHeight / 2 })
+      }
+    }
+    requestAnimationFrame(place)
+    window.setTimeout(place, 140)
+    window.setTimeout(place, 320)
+  }, [pendingTick, activeTab, granularity, agg, buckets, state.days]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return undefined
@@ -1708,7 +1847,7 @@ export default function App() {
     <CurrencyProvider currency={displayCurrency} locale={displayLocale} multiplier={shownMultiplier}>
     <div className="shell">
     <UniunRail look={skin === 'uniun' ? theme : skin === 'fis' ? (theme === 'dark' ? 'fis-dark' : 'fis-light') : skin} onLook={(l) => { if (l === 'light' || l === 'dark') { setSkin('uniun'); setTheme(l) } else if (l === 'fis-light' || l === 'fis-dark') { setSkin('fis'); setTheme(l === 'fis-dark' ? 'dark' : 'light') } else { setSkin(l); setTheme('light') } }} />
-    <div ref={appRef} className={`app ${dock.right ? 'app--docked' : ''} ${dock.left ? 'app--docked-left' : ''} ${wantLeft && wantRight ? 'app--both' : ''} ${nav.open ? 'app--navopen' : ''} ${nav.isOpen ? 'app--navshown' : ''}`}>
+    <div ref={appRef} className={`app ${dock.right ? 'app--docked' : ''} ${dock.left ? 'app--docked-left' : ''} ${wantLeft && wantRight ? 'app--both' : ''} ${nav.open ? 'app--navopen' : ''} ${nav.isOpen ? 'app--navshown' : ''} ${focusInvoice ? 'app--agentfocus' : ''}`}>
       {/* grid navigator: breadcrumb bar + in-frame route browser */}
       <div className="gnavwrap">
       <div className="tabbar">
@@ -1717,8 +1856,18 @@ export default function App() {
               them to mark which view is active. */}
           {nav.bar}
         </div>
+        <button
+          className={`agentbtn ${agentOpen ? 'agentbtn--on' : ''}`}
+          onClick={() => setAgentOpen((o) => !o)}
+          aria-pressed={agentOpen}
+          title={agentOpen ? 'Close the agent' : 'Ask the agent'}
+        >
+          <AgentIcon size={16} />
+          <span className="agentbtn__label">Agent</span>
+        </button>
       </div>
       {nav.band}
+      <AgentTrailBar trail={agentTrail} onStep={stepAgentTrail} onBack={backFromAgent} onDismiss={dismissAgentTrail} />
       </div>
       {nav.editor}
 
@@ -2207,7 +2356,19 @@ export default function App() {
         cell={underlying}
         company={view.title}
         currency={displayCurrency}
+        focusInvoice={focusInvoice}
         onClose={closeUnderlying}
+      />
+
+      <AgentPanel
+        open={agentShown}
+        gridTitle={view.title}
+        messages={agentMsgs}
+        busy={agentBusy}
+        activeKey={agentTrail ? agentTrail.results[agentTrail.index]?.key : null}
+        onSend={sendAgent}
+        onFollow={followInvoice}
+        onClose={() => setAgentOpen(false)}
       />
 
       <OutlierPanel

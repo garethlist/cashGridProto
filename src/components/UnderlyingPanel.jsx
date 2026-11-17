@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMoney } from '../currency.jsx'
 import { dayLabel } from '../model.js'
 
@@ -7,7 +7,7 @@ const pct = (a, t) => (t ? Math.max(2, Math.round((a / t) * 100)) : 0)
 // Base-mode detail drawer: the underlying data behind one aggregate cell —
 // invoices grouped by counterparty (Customer Receipts / Suppliers) or the daily
 // cash flows that make up the bucket.
-export default function UnderlyingPanel({ open, cell, company, currency, onClose }) {
+export default function UnderlyingPanel({ open, cell, company, currency, focusInvoice, onClose }) {
   const { money0, num0 } = useMoney()
   const data = cell?.data
   const row = cell?.row
@@ -46,7 +46,14 @@ export default function UnderlyingPanel({ open, cell, company, currency, onClose
                     <span>Amount</span>
                   </div>
                   {data.groups.map((g, i) => (
-                    <PartyGroup key={g.name} rank={i + 1} group={g} total={data.total} money0={money0} />
+                    <PartyGroup
+                      key={`${g.name}|${bucket.key}|${row.id}`}
+                      rank={i + 1}
+                      group={g}
+                      total={data.total}
+                      money0={money0}
+                      focusId={g.invoices.some((inv) => inv.id === focusInvoice) ? focusInvoice : null}
+                    />
                   ))}
                   {data.other && (
                     <div className="party party--other">
@@ -79,8 +86,17 @@ export default function UnderlyingPanel({ open, cell, company, currency, onClose
   )
 }
 
-function PartyGroup({ rank, group, total, money0 }) {
-  const [open, setOpen] = useState(false)
+function PartyGroup({ rank, group, total, money0, focusId }) {
+  const [open, setOpen] = useState(!!focusId)
+  const focusRef = useRef(null)
+  // An agent result lands here: open the counterparty and bring the invoice into
+  // view once the panel has slid in.
+  useEffect(() => {
+    if (!focusId) return undefined
+    setOpen(true)
+    const t = window.setTimeout(() => focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 260)
+    return () => clearTimeout(t)
+  }, [focusId])
   const share = total ? Math.round((group.amount / total) * 100) : 0
   return (
     <div className={`party ${open ? 'party--open' : ''}`}>
@@ -108,7 +124,7 @@ function PartyGroup({ rank, group, total, money0 }) {
       {open && (
         <div className="party__invoices">
           {group.invoices.map((inv) => (
-            <div key={inv.id} className="invrow">
+            <div key={inv.id} ref={inv.id === focusId ? focusRef : undefined} className={`invrow ${inv.id === focusId ? 'invrow--focus' : ''}`}>
               <span className="invrow__id">{inv.id}</span>
               <span className="invrow__date">{dayLabel(inv.date)}</span>
               <span className="invrow__status">{inv.status}</span>
